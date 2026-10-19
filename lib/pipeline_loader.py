@@ -24,6 +24,13 @@ SCHEMA_PATH = (
 from functools import lru_cache
 
 
+def _search_dirs() -> list[Path]:
+    """External ``OPENMONTAGE_PIPELINE_DIRS`` first, then built-in pipeline_defs/."""
+    from lib.paths import PIPELINE_DIRS
+
+    return [*PIPELINE_DIRS, PIPELINE_DEFS_DIR]
+
+
 @lru_cache(maxsize=1)
 def _load_manifest_schema() -> dict:
     with open(SCHEMA_PATH, encoding="utf-8") as f:
@@ -56,10 +63,18 @@ def load_pipeline(name: str, defs_dir: Optional[Path] = None) -> dict[str, Any]:
     Returns:
         Validated pipeline manifest dict.
     """
-    defs_dir = defs_dir or PIPELINE_DEFS_DIR
-    path = defs_dir / f"{name}.yaml"
-    if not path.exists():
-        raise FileNotFoundError(f"Pipeline manifest not found: {path}")
+    if defs_dir is not None:
+        path = defs_dir / f"{name}.yaml"
+        if not path.exists():
+            raise FileNotFoundError(f"Pipeline manifest not found: {path}")
+    else:
+        candidates = [d / f"{name}.yaml" for d in _search_dirs()]
+        path = next((c for c in candidates if c.exists()), None)
+        if path is None:
+            raise FileNotFoundError(
+                f"Pipeline manifest not found: {name!r} "
+                f"(searched {', '.join(str(c.parent) for c in candidates)})"
+            )
 
     with open(path, encoding="utf-8") as f:
         manifest = yaml.safe_load(f)
@@ -72,8 +87,11 @@ def load_pipeline(name: str, defs_dir: Optional[Path] = None) -> dict[str, Any]:
 
 def list_pipelines(defs_dir: Optional[Path] = None) -> list[str]:
     """List all available pipeline manifest names."""
-    defs_dir = defs_dir or PIPELINE_DEFS_DIR
-    return [p.stem for p in defs_dir.glob("*.yaml")]
+    dirs = [defs_dir] if defs_dir is not None else _search_dirs()
+    names: list[str] = []
+    for d in dirs:
+        names.extend(p.stem for p in d.glob("*.yaml") if p.stem not in names)
+    return names
 
 
 def _condition_is_active(condition: Optional[str], context: Optional[dict[str, Any]]) -> bool:

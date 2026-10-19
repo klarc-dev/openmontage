@@ -88,7 +88,10 @@ class ToolRegistry:
         """Load .env file into os.environ if present, so tools can find API keys."""
         from pathlib import Path
         import os
-        env_path = Path(__file__).resolve().parent.parent / ".env"
+        try:
+            from lib.paths import ENV_FILE as env_path
+        except ImportError:  # tools imported without the source root on sys.path
+            env_path = Path(__file__).resolve().parent.parent / ".env"
         if not env_path.is_file():
             return
         import re

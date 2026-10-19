@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from styles.playbook_loader import list_playbooks
+from styles.playbook_loader import find_playbook, list_playbooks
 from tools.video.video_compose import VideoCompose
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,7 +32,8 @@ PLAYBOOK_NAMES = sorted(list_playbooks())
 
 
 def _raw(name: str) -> dict:
-    return yaml.safe_load((STYLES_DIR / f"{name}.yaml").read_text(encoding="utf-8"))
+    # Resolve like the loader does: playbooks may come from OPENMONTAGE_STYLES_PATH.
+    return yaml.safe_load(find_playbook(name).read_text(encoding="utf-8"))
 
 
 def _theme(name: str) -> dict:

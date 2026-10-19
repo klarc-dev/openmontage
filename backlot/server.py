@@ -19,9 +19,11 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from backlot.state import PROJECTS_DIR, REPO_ROOT, list_projects, load_board_state, summarize_project
+from lib.paths import WORK_DIR
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
-THUMB_CACHE_DIR = REPO_ROOT / ".backlot" / "thumbs"
+# Runtime cache, not a project output: lives under OPENMONTAGE_WORK_DIR.
+THUMB_CACHE_DIR = WORK_DIR / ".backlot" / "thumbs"
 THUMB_WIDTHS = (320, 640, 960)
 
 # Paths inside a project whose changes are pure noise for the board.

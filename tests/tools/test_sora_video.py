@@ -37,6 +37,9 @@ def test_sora_video_loads_openai_key_from_repo_dotenv_when_process_env_is_empty(
     try:
         env = os.environ.copy()
         env.pop("OPENAI_API_KEY", None)
+        # This test is about the default (<repo>/.env); an embedding workspace
+        # may point OPENMONTAGE_ENV_FILE elsewhere.
+        env.pop("OPENMONTAGE_ENV_FILE", None)
         env["PYTHONPATH"] = str(PROJECT_ROOT)
 
         result = subprocess.run(

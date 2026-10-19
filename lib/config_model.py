@@ -75,7 +75,9 @@ class OpenMontageConfig(BaseModel):
     def load(cls, config_path: Optional[Path] = None) -> "OpenMontageConfig":
         """Load config from YAML file. Falls back to defaults if file missing."""
         if config_path is None:
-            config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+            from lib.paths import CONFIG_PATH
+
+            config_path = CONFIG_PATH
 
         if config_path.exists():
             with open(config_path) as f:

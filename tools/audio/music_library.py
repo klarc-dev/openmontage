@@ -137,7 +137,11 @@ class MusicLibrary(BaseTool):
         env_dir = os.environ.get("MUSIC_LIBRARY_DIR")
         if env_dir:
             return Path(env_dir).expanduser()
-        return _PROJECT_ROOT / "music_library"
+        try:
+            from lib.paths import MUSIC_LIBRARY_DIR
+        except ImportError:  # tools imported without the source root on sys.path
+            return _PROJECT_ROOT / "music_library"
+        return MUSIC_LIBRARY_DIR
 
     def _list_tracks(self, library_dir: Path) -> list[Path]:
         if not library_dir.is_dir():

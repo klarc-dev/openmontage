@@ -13,10 +13,17 @@ from dotenv import load_dotenv
 
 
 def load_env(project_root: Optional[Path] = None) -> None:
-    """Load .env file from project root."""
+    """Load the .env file.
+
+    With ``project_root``, loads ``<project_root>/.env``. Otherwise loads
+    ``lib.paths.ENV_FILE`` (``OPENMONTAGE_ENV_FILE``, default ``<home>/.env``).
+    """
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
-    env_path = project_root / ".env"
+        from lib.paths import ENV_FILE
+
+        env_path = ENV_FILE
+    else:
+        env_path = project_root / ".env"
     if env_path.exists():
         load_dotenv(env_path)
 

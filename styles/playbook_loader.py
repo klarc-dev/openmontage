@@ -34,28 +34,55 @@ def _load_playbook_schema() -> dict:
         return json.load(f)
 
 
+def _search_dirs(styles_dir: Optional[Path]) -> list[Path]:
+    """Style directories to search, in precedence order.
+
+    An explicit ``styles_dir`` is searched alone. Otherwise the external
+    ``OPENMONTAGE_STYLES_PATH`` entries come first, then the built-in
+    ``styles/`` (see ``lib.paths.style_dirs``).
+    """
+    if styles_dir is not None:
+        return [styles_dir]
+    try:
+        from lib.paths import STYLES_PATH
+    except ImportError:  # loaded without the source root on sys.path
+        STYLES_PATH = []
+    return [*STYLES_PATH, STYLES_DIR]
+
+
+def find_playbook(name: str, styles_dir: Optional[Path] = None) -> Path:
+    """Return the path of playbook ``name``, or raise FileNotFoundError.
+
+    In each search directory, a preset (``<dir>/<name>.yaml``) wins over a
+    generated playbook (``<dir>/custom/<name>.yaml``). Across directories the
+    first match wins.
+    """
+    searched: list[Path] = []
+    for base in _search_dirs(styles_dir):
+        for candidate in (base / f"{name}.yaml", base / CUSTOM_SUBDIR / f"{name}.yaml"):
+            if candidate.exists():
+                return candidate
+            searched.append(candidate.parent)
+    raise FileNotFoundError(
+        f"Playbook not found: {name!r} (searched {', '.join(str(p) for p in searched)})"
+    )
+
+
 def load_playbook(name: str, styles_dir: Optional[Path] = None) -> dict[str, Any]:
     """Load and validate a style playbook by name.
 
     Presets live directly in the styles dir; generated playbooks live in its
-    ``custom/`` subdirectory. A preset wins when both exist.
+    ``custom/`` subdirectory. A preset wins when both exist. Directories from
+    ``OPENMONTAGE_STYLES_PATH`` are searched before the built-in ``styles/``.
 
     Args:
         name: Playbook name (without .yaml extension).
-        styles_dir: Override directory for playbook files.
+        styles_dir: Override directory for playbook files (searched alone).
 
     Returns:
         Validated playbook dict.
     """
-    styles_dir = styles_dir or STYLES_DIR
-    path = styles_dir / f"{name}.yaml"
-    if not path.exists():
-        path = styles_dir / CUSTOM_SUBDIR / f"{name}.yaml"
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Playbook not found: {name!r} "
-            f"(searched {styles_dir} and {styles_dir / CUSTOM_SUBDIR})"
-        )
+    path = find_playbook(name, styles_dir)
 
     with open(path, encoding="utf-8") as f:
         playbook = yaml.safe_load(f)
@@ -72,15 +99,12 @@ def validate_playbook(playbook: dict) -> None:
 
 def list_playbooks(styles_dir: Optional[Path] = None) -> list[str]:
     """List all available playbook names (presets + generated custom ones)."""
-    styles_dir = styles_dir or STYLES_DIR
-    names = [
-        p.stem
-        for p in styles_dir.glob("*.yaml")
-        if p.stem != "__pycache__"
-    ]
-    custom_dir = styles_dir / CUSTOM_SUBDIR
-    if custom_dir.exists():
-        names.extend(p.stem for p in custom_dir.glob("*.yaml"))
+    names: list[str] = []
+    for base in _search_dirs(styles_dir):
+        names.extend(p.stem for p in base.glob("*.yaml") if p.stem != "__pycache__")
+        custom_dir = base / CUSTOM_SUBDIR
+        if custom_dir.exists():
+            names.extend(p.stem for p in custom_dir.glob("*.yaml"))
     return sorted(set(names))
 
 

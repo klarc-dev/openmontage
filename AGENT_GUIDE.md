@@ -228,6 +228,26 @@ All tools and agents must write outputs to these paths — **always pass an expl
 
 **This applies to atelier and HyperFrames-skill runs too**: hand-authored compositions still write the canonical artifacts they have (script or beats-plan, scene_plan-equivalent, asset manifest) plus checkpoints into `projects/<project-id>/`. The board is runtime-agnostic; only runs that skip the artifacts get a degraded board.
 
+### Running from an external workspace
+
+Every root above defaults to this checkout. A wrapper repository, CI job, or read-only
+install can redirect them with environment variables instead of editing the tree
+(definitions in `lib/paths.py`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENMONTAGE_PROJECTS_DIR` | `<home>/projects` | Project workspaces, checkpoints, Backlot board |
+| `OPENMONTAGE_CONFIG` | `<home>/config.yaml` | Runtime configuration |
+| `OPENMONTAGE_ENV_FILE` | `<home>/.env` | API keys and provider settings |
+| `OPENMONTAGE_STYLES_PATH` | empty | Extra style playbook dirs (`os.pathsep` list), searched before `styles/`; first match wins; generated playbooks are saved to the first entry's `custom/` |
+| `OPENMONTAGE_PIPELINE_DIRS` | empty | Extra pipeline manifest dirs, searched before `pipeline_defs/` |
+| `OPENMONTAGE_WORK_DIR` | `<home>` | Runtime caches that are not project outputs (Backlot thumbnails, portable runtimes) |
+| `OPENMONTAGE_MUSIC_LIBRARY_DIR` | `<home>/music_library` | Royalty-free music library (`MUSIC_LIBRARY_DIR` still wins) |
+
+`<home>` is the source checkout, exported as `lib.paths.OPENMONTAGE_HOME`. The `python -c`
+snippets in this guide import from it, so run them with the checkout as working directory
+or on `PYTHONPATH`.
+
 ## Music Library
 
 Users can place royalty-free music tracks in `music_library/` (gitignored). The asset director will check this folder before falling back to API-based music generation.

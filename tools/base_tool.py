@@ -22,6 +22,15 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 
+def _env_file_path() -> Path:
+    """The .env file to load: ``OPENMONTAGE_ENV_FILE`` or ``<home>/.env``."""
+    try:
+        from lib.paths import ENV_FILE
+    except ImportError:  # tools imported without the source root on sys.path
+        return Path(__file__).resolve().parent.parent / ".env"
+    return ENV_FILE
+
+
 def _load_dotenv() -> None:
     """Load .env into os.environ once at import time.
 
@@ -29,7 +38,7 @@ def _load_dotenv() -> None:
     even when tools are imported directly without going through the registry.
     Only sets variables that are not already in the environment.
     """
-    env_path = Path(__file__).resolve().parent.parent / ".env"
+    env_path = _env_file_path()
     if not env_path.is_file():
         return
     import re

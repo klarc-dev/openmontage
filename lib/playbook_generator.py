@@ -24,29 +24,41 @@ STYLES_DIR = Path(__file__).resolve().parent.parent / "styles"
 CUSTOM_STYLES_DIR = STYLES_DIR / "custom"
 
 
+def _custom_styles_dir() -> Path:
+    """Where generated playbooks are saved.
+
+    The ``custom/`` subdirectory of the first ``OPENMONTAGE_STYLES_PATH`` entry
+    when one is set, so an external workspace never writes into the source
+    tree; otherwise the built-in ``styles/custom/``.
+    """
+    from lib.paths import STYLES_PATH
+
+    return STYLES_PATH[0] / "custom" if STYLES_PATH else CUSTOM_STYLES_DIR
+
+
 def _load_playbook_schema() -> dict:
     with open(PLAYBOOK_SCHEMA_PATH) as f:
         return json.load(f)
 
 
 def load_existing_playbook(name: str) -> dict[str, Any]:
-    """Load an existing playbook YAML by name."""
-    path = STYLES_DIR / f"{name}.yaml"
-    if not path.exists():
-        # Check custom directory
-        path = CUSTOM_STYLES_DIR / f"{name}.yaml"
-    if not path.exists():
-        raise FileNotFoundError(f"Playbook not found: {name}")
+    """Load an existing playbook YAML by name.
+
+    Searches ``OPENMONTAGE_STYLES_PATH`` first, then the built-in ``styles/``
+    (each with its ``custom/`` subdirectory); the first match wins.
+    """
+    from styles.playbook_loader import find_playbook
+
+    path = find_playbook(name)
     with open(path) as f:
         return yaml.safe_load(f)
 
 
 def list_playbooks() -> list[str]:
-    """List all available playbook names (preset + custom)."""
-    names = [p.stem for p in STYLES_DIR.glob("*.yaml")]
-    if CUSTOM_STYLES_DIR.exists():
-        names.extend(p.stem for p in CUSTOM_STYLES_DIR.glob("*.yaml"))
-    return sorted(set(names))
+    """List all available playbook names (preset + custom, all search dirs)."""
+    from styles.playbook_loader import list_playbooks as _list
+
+    return _list()
 
 
 def generate_playbook(
@@ -216,8 +228,9 @@ def save_playbook(
     name = project_name or playbook["identity"]["name"]
     filename = name.lower().replace(" ", "-").replace("_", "-")
 
-    CUSTOM_STYLES_DIR.mkdir(parents=True, exist_ok=True)
-    path = CUSTOM_STYLES_DIR / f"{filename}.yaml"
+    custom_dir = _custom_styles_dir()
+    custom_dir.mkdir(parents=True, exist_ok=True)
+    path = custom_dir / f"{filename}.yaml"
 
     with open(path, "w") as f:
         yaml.dump(playbook, f, default_flow_style=False, allow_unicode=True)
