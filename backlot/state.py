@@ -585,10 +585,85 @@ def _last_activity(project_dir: Path) -> float:
 # Public API
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Project discovery (flat and nested layouts)
+# ---------------------------------------------------------------------------
+# Projects usually sit directly under projects/. Some workspaces group them
+# (projects/<group>/<project>/ or projects/<group>/<series>/<project>/). A
+# first-level directory that is not itself a project but contains marked
+# projects (project.json or checkpoint_*.json) is expanded; its projects get
+# ids that join the path segments with "~" so ids stay a single URL segment.
+
+PROJECT_ID_SEP = "~"
+MAX_PROJECT_DEPTH = 3
+
+
+def _is_marked_project(path: Path) -> bool:
+    return (path / "project.json").is_file() or any(path.glob("checkpoint_*.json"))
+
+
+def _skip_dir(path: Path) -> bool:
+    return not path.is_dir() or path.is_symlink() or path.name.startswith(("_", "."))
+
+
+def _nested_projects(container: Path, depth: int) -> list[Path]:
+    found: list[Path] = []
+    if depth > MAX_PROJECT_DEPTH:
+        return found
+    try:
+        children = sorted(container.iterdir())
+    except OSError:
+        return found
+    for child in children:
+        if _skip_dir(child):
+            continue
+        if _is_marked_project(child):
+            found.append(child)
+        else:
+            found.extend(_nested_projects(child, depth + 1))
+    return found
+
+
+def discover_project_dirs(projects_dir: Optional[Path] = None) -> list[Path]:
+    """Every project directory: first-level dirs, with grouping dirs expanded."""
+    root = Path(projects_dir) if projects_dir else PROJECTS_DIR
+    if not root.is_dir():
+        return []
+    dirs: list[Path] = []
+    for entry in sorted(root.iterdir()):
+        if _skip_dir(entry):
+            continue
+        nested = [] if _is_marked_project(entry) else _nested_projects(entry, 2)
+        dirs.extend(nested or [entry])
+    return dirs
+
+
+def project_id_for(project_dir: Path, projects_dir: Optional[Path] = None) -> str:
+    """Stable id of a project dir: its path below the projects root, "~"-joined."""
+    root = Path(projects_dir) if projects_dir else PROJECTS_DIR
+    try:
+        rel = Path(project_dir).resolve().relative_to(root.resolve())
+    except ValueError:
+        return Path(project_dir).name
+    return PROJECT_ID_SEP.join(rel.parts) or Path(project_dir).name
+
+
+def project_dir_for(project_id: str, projects_dir: Optional[Path] = None) -> Optional[Path]:
+    """Inverse of project_id_for; None for unsafe or malformed ids."""
+    root = Path(projects_dir) if projects_dir else PROJECTS_DIR
+    if not project_id or any(c in project_id for c in "/\\:"):
+        return None
+    parts = project_id.split(PROJECT_ID_SEP)
+    if len(parts) > MAX_PROJECT_DEPTH or any(p in ("", ".", "..") for p in parts):
+        return None
+    return root.joinpath(*parts)
+
+
 def load_board_state(project_dir: Path) -> dict[str, Any]:
     """Full BoardState for one project. Never raises."""
     project_dir = Path(project_dir)
-    project_id = project_dir.name
+    project_id = project_id_for(project_dir)
 
     marker = _read_json(project_dir / "project.json") or {}
     meta_json = _read_json(project_dir / "meta.json") or {}
@@ -689,14 +764,15 @@ def list_projects(projects_dir: Optional[Path] = None) -> list[dict[str, Any]]:
     if not root.is_dir():
         return []
     summaries = []
-    for entry in sorted(root.iterdir()):
-        if not entry.is_dir() or entry.name.startswith(("_", ".")):
-            continue
+    for entry in discover_project_dirs(root):
+        project_id = project_id_for(entry, root)
         try:
-            summaries.append(summarize_project(entry))
+            summary = summarize_project(entry)
+            summary["project_id"] = project_id
+            summaries.append(summary)
         except Exception:
             summaries.append({
-                "project_id": entry.name,
+                "project_id": project_id,
                 "title": entry.name.replace("-", " ").title(),
                 "pipeline_type": "unknown",
                 "has_pipeline_state": False,

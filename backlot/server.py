@@ -18,7 +18,17 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from backlot.state import PROJECTS_DIR, REPO_ROOT, list_projects, load_board_state, summarize_project
+from backlot.state import (
+    PROJECT_ID_SEP,
+    PROJECTS_DIR,
+    REPO_ROOT,
+    discover_project_dirs,
+    list_projects,
+    load_board_state,
+    project_dir_for,
+    project_id_for,
+    summarize_project,
+)
 from lib.paths import WORK_DIR
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
@@ -28,6 +38,8 @@ THUMB_WIDTHS = (320, 640, 960)
 
 # Paths inside a project whose changes are pure noise for the board.
 _IGNORE_PARTS = {"node_modules", ".git", "__pycache__", ".cache"}
+# Ids of projects found below a grouping directory (refreshed with the library).
+_NESTED_PROJECT_IDS: set[str] = set()
 
 SSE_HEARTBEAT_SECONDS = 15
 
@@ -88,24 +100,29 @@ def _cached_summaries() -> list[dict]:
     if not PROJECTS_DIR.is_dir():
         return []
     summaries = []
-    for entry in sorted(PROJECTS_DIR.iterdir()):
-        if not entry.is_dir() or entry.name.startswith(("_", ".")):
-            continue
-        cached = _summary_cache.get(entry.name)
+    nested: set[str] = set()
+    for entry in discover_project_dirs(PROJECTS_DIR):
+        project_id = project_id_for(entry, PROJECTS_DIR)
+        if PROJECT_ID_SEP in project_id:
+            nested.add(project_id)
+        cached = _summary_cache.get(project_id)
         if cached is None:
             try:
                 cached = summarize_project(entry)
+                cached["project_id"] = project_id
             except Exception:
                 cached = {
-                    "project_id": entry.name, "title": entry.name,
+                    "project_id": project_id, "title": entry.name,
                     "pipeline_type": "unknown", "has_pipeline_state": False,
                     "poster": None, "live": False, "last_activity": 0,
                     "active_stage": None, "awaiting_human": False,
                     "stage_states": [], "completed_count": 0,
                     "render_count": 0, "scene_count": 0, "error": "unreadable",
                 }
-            _summary_cache[entry.name] = cached
+            _summary_cache[project_id] = cached
         summaries.append(cached)
+    _NESTED_PROJECT_IDS.clear()
+    _NESTED_PROJECT_IDS.update(nested)
     summaries.sort(key=lambda s: (not s["live"], -(s["last_activity"] or 0)))
     return summaries
 
@@ -128,6 +145,11 @@ def _project_of_change(path_str: str) -> Optional[str]:
     parts = rel.replace("\\", "/").split("/")
     if _IGNORE_PARTS.intersection(parts):
         return None
+    # Nested layouts: the longest known nested project id that prefixes the path.
+    for depth in range(min(len(parts), 3), 1, -1):
+        candidate = PROJECT_ID_SEP.join(parts[:depth])
+        if candidate in _NESTED_PROJECT_IDS:
+            return candidate
     return parts[0]
 
 
@@ -312,9 +334,9 @@ def create_app() -> FastAPI:
 def _safe_project_dir(project_id: str) -> Path:
     # ':' rejects Windows drive-relative ids like "C:" (PROJECTS_DIR / "C:"
     # collapses back to PROJECTS_DIR itself).
-    if any(c in project_id for c in "/\\:") or project_id in (".", ".."):
+    project_dir = project_dir_for(project_id, PROJECTS_DIR)
+    if project_dir is None:
         raise HTTPException(status_code=400, detail="invalid project id")
-    project_dir = PROJECTS_DIR / project_id
     if not project_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"unknown project: {project_id}")
     return project_dir
