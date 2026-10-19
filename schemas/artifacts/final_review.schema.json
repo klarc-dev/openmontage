@@ -52,6 +52,49 @@
               "type": "array",
               "items": { "type": "string" }
             },
+            "full_size_evidence": {
+              "type": "array",
+              "description": "Reviewer-owned full-resolution frame evidence. For atelier delivery, record at least one entry per scene with scene_id, a representative timestamp/frame, inspected_full_size=true, and review notes.",
+              "items": {
+                "type": "object",
+                "required": ["scene_id", "timestamp_seconds", "frame_path", "inspected_full_size", "review_notes"],
+                "properties": {
+                  "scene_id": { "type": ["string", "null"] },
+                  "timestamp_seconds": { "type": "number", "minimum": 0 },
+                  "frame_path": { "type": "string" },
+                  "inspected_full_size": { "type": "boolean" },
+                  "review_notes": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "blocking_composition_defects": {
+              "type": "array",
+              "description": "Human-reviewed composition defects that block atelier delivery. Creative judgment belongs to the reviewer, not automated image heuristics.",
+              "items": {
+                "type": "object",
+                "required": ["scene_id", "defect_type", "description", "evidence_frame_path", "status"],
+                "properties": {
+                  "scene_id": { "type": ["string", "null"] },
+                  "defect_type": {
+                    "type": "string",
+                    "enum": [
+                      "clipping_or_unsafe_margins",
+                      "unreadable_or_excessive_type_scale",
+                      "hierarchy_collapse",
+                      "unstable_grid",
+                      "unintended_emptiness",
+                      "severe_imbalance",
+                      "other"
+                    ]
+                  },
+                  "description": { "type": "string", "minLength": 1 },
+                  "evidence_frame_path": { "type": "string" },
+                  "status": { "type": "string", "enum": ["open", "resolved"] }
+                },
+                "additionalProperties": false
+              }
+            },
             "black_frames_detected": { "type": "boolean" },
             "broken_overlays": { "type": "boolean" },
             "missing_assets": { "type": "boolean" },

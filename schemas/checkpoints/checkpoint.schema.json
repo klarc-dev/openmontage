@@ -19,9 +19,22 @@
     "timestamp": { "type": "string", "format": "date-time" },
     "pipeline_type": { "type": "string", "description": "Pipeline manifest name" },
     "style_playbook": { "type": "string" },
-    "checkpoint_policy": { "type": "string", "enum": ["guided", "manual_all", "auto_noncreative"] },
+    "checkpoint_policy": { "type": "string", "enum": ["guided", "manual_all", "auto_noncreative", "autonomous"] },
     "human_approval_required": { "type": "boolean" },
     "human_approved": { "type": "boolean" },
+    "automated_approval": {
+      "type": "object",
+      "description": "Under the autonomous policy, the record that stands in for a human approval on a gated stage. It is an honest automated verdict, never a human_approved flag.",
+      "required": ["reviewer", "timestamp", "verdict", "evidence_paths"],
+      "properties": {
+        "reviewer": { "type": "string", "minLength": 1 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "verdict": { "const": "pass" },
+        "evidence_paths": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "artifacts": {
       "type": "object",
       "description": "Map of artifact name to artifact data or file path",

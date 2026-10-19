@@ -281,6 +281,21 @@ def _stage_requires_approval(pipeline_type: Optional[str], stage: str) -> Option
     return get_stage_human_approval_default(manifest, stage)
 
 
+def _is_approved(checkpoint: dict[str, Any]) -> bool:
+    """A gated stage counts as approved by a human, or, under the autonomous
+    policy only, by a passing automated review with evidence. Kept as one rule
+    so the write gate and the predecessor check can never disagree."""
+    if checkpoint.get("human_approved"):
+        return True
+    automated = checkpoint.get("automated_approval")
+    return (
+        checkpoint.get("checkpoint_policy") == "autonomous"
+        and isinstance(automated, dict)
+        and automated.get("verdict") == "pass"
+        and bool(automated.get("evidence_paths"))
+    )
+
+
 def _enforce_stage_prerequisites(
     pipeline_dir: Path,
     project_id: str,
@@ -328,9 +343,7 @@ def _enforce_stage_prerequisites(
         if checkpoint.get("status") != "completed":
             incomplete.append(predecessor)
             continue
-        if _stage_requires_approval(pipeline_type, predecessor) and not checkpoint.get(
-            "human_approved"
-        ):
+        if _stage_requires_approval(pipeline_type, predecessor) and not _is_approved(checkpoint):
             unapproved.append(predecessor)
 
     if incomplete or unapproved:
@@ -431,6 +444,7 @@ def write_checkpoint(
     checkpoint_policy: str = "guided",
     human_approval_required: bool = False,
     human_approved: bool = False,
+    automated_approval: Optional[dict] = None,
     review: Optional[dict] = None,
     cost_snapshot: Optional[dict] = None,
     error: Optional[str] = None,
@@ -476,9 +490,22 @@ def write_checkpoint(
     # back-compat so in-flight and legacy projects keep resuming.
     manifest_gate = _stage_requires_approval(pipeline_type, stage)
     gated = bool(manifest_gate) or human_approval_required
+    if automated_approval is not None and checkpoint_policy != "autonomous":
+        raise CheckpointValidationError(
+            "automated_approval is only valid under checkpoint_policy='autonomous'."
+        )
     if gated:
         human_approval_required = True
-        if status == "completed" and not human_approved:
+        # Under the autonomous policy nobody is available to approve, so a
+        # gated stage completes on an automated review record instead. The
+        # record is kept distinct from human_approved so the audit trail never
+        # claims a human looked when none did.
+        approved = _is_approved({
+            "human_approved": human_approved,
+            "checkpoint_policy": checkpoint_policy,
+            "automated_approval": automated_approval,
+        })
+        if status == "completed" and not approved:
             gate_source = (
                 f"human_approval_default: true in the {pipeline_type!r} manifest"
                 if manifest_gate
@@ -490,7 +517,10 @@ def write_checkpoint(
                 f"human_approved=True. Correct protocol: write "
                 f"status='awaiting_human', present the artifact summary to the "
                 f"user, END YOUR TURN, and only after the user approves "
-                f"re-write with status='completed', human_approved=True."
+                f"re-write with status='completed', human_approved=True. For "
+                f"an unattended run, use checkpoint_policy='autonomous' with an "
+                f"automated_approval record (reviewer, timestamp, verdict "
+                f"'pass', evidence_paths)."
             )
 
     _enforce_stage_prerequisites(
@@ -513,6 +543,8 @@ def write_checkpoint(
         "human_approved": human_approved,
         "artifacts": artifacts,
     }
+    if automated_approval is not None:
+        checkpoint["automated_approval"] = automated_approval
     if style_playbook is not None:
         checkpoint["style_playbook"] = style_playbook
     if review is not None:

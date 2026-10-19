@@ -311,6 +311,17 @@ Run at **compose** and **publish** stages. Ensures the agent reviewed the actual
    - `subtitle_check` must report presence/absence
    - Any check with missing data: **SUGGESTION** — "Self-review check [X] has incomplete data"
 4. **Promise preservation**: If `promise_preservation.silent_downgrade_detected` is true: **CRITICAL** — "Self-review detected silent downgrade from motion-led to still-led."
+5. **Full-size visual acceptance for atelier delivery**: Inspect representative frames at their actual output size, not only thumbnails. Record at least one `visual_spotcheck.full_size_evidence[]` entry per scene with `scene_id`, `timestamp_seconds`, `frame_path`, `inspected_full_size: true`, and concrete `review_notes`.
+   - Missing per-scene full-size evidence for atelier work: **CRITICAL** — "Visual acceptance lacks full-size evidence for every scene. Review the actual rendered frames before delivery."
+   - The runtime may pre-populate sampled frames with `scene_id: null` and `inspected_full_size: false`; those are extraction evidence, not acceptance. The reviewer must map and inspect them or capture additional scene frames.
+6. **Blocking composition defects for atelier delivery**: Record each defect in `visual_spotcheck.blocking_composition_defects[]` with the affected scene and evidence frame. Any open defect in these categories is **CRITICAL** and requires revision before delivery:
+   - clipping or unsafe margins
+   - unreadable text or excessive type scale
+   - hierarchy collapse
+   - unstable grid or alignment system
+   - unintended emptiness that reads as unfinished rather than intentional restraint
+   - severe visual imbalance
+   Do not add computer-vision guesses or Python heuristics for these calls. They are full-size, human-judged acceptance criteria governed by this reviewer skill.
 
 ### At publish stage:
 1. Verify that `final_review` was passed through as a required artifact
@@ -349,6 +360,7 @@ The templated→atelier inversion (`AGENT_GUIDE.md` → "Composition Authoring M
    - *"Could this video be any other product's video?"* (yes ⇒ CRITICAL, re-author art direction)
    - *"Does its visual language reuse a look from a prior piece I've made?"* (yes ⇒ CRITICAL, re-author)
    Distinctness is taste-call territory the tool can't automate; reviewer absence on this question is itself a **CRITICAL** finding ("distinctness review not recorded").
+7. **Composition integrity review (human-judged, mandatory and separate from distinctness).** Apply the full-size evidence and blocking-defect policy from "Final Self-Review Review". Clipping/unsafe margins, unreadable or excessive type scale, hierarchy collapse, unstable grid, unintended emptiness, and severe imbalance are **CRITICAL** for atelier delivery even when the piece is visually distinct. Record defects under `final_review.checks.visual_spotcheck.blocking_composition_defects`; distinctness answers do not substitute for composition integrity.
 
 ### At publish stage (when composition_mode == "atelier"):
-1. All six atelier compose-stage checks above (existence of `atelier` block, stock_reuse, art_direction_declared, scene_distinctness, captions/text dedup, human distinctness review) must show `resolved` in the review record. Any unresolved: **CRITICAL** — "Cannot publish atelier piece with unresolved doctrine or distinctness findings."
+1. All seven atelier compose-stage checks above (existence of `atelier` block, stock_reuse, art_direction_declared, scene_distinctness, captions/text dedup, human distinctness review, composition integrity) must show `resolved` in the review record. Any unresolved: **CRITICAL** — "Cannot publish atelier piece with unresolved doctrine, distinctness, or composition-integrity findings."

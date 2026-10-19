@@ -23,6 +23,10 @@ class CheckpointPolicy(str, Enum):
     GUIDED = "guided"
     MANUAL_ALL = "manual_all"
     AUTO_NONCREATIVE = "auto_noncreative"
+    # Unattended batch production: gated stages complete on an automated
+    # review record (see lib/checkpoint.write_checkpoint), never on a
+    # fabricated human_approved flag.
+    AUTONOMOUS = "autonomous"
 
 
 class LLMConfig(BaseModel):

@@ -14,7 +14,7 @@ budget:
   require_approval_for_new_paid_tool: true
 
 checkpoint:
-  policy: guided                 # guided | manual_all | auto_noncreative
+  policy: guided                 # guided | manual_all | auto_noncreative | autonomous
   storage_dir: pipeline          # relative to project root
 
 output:

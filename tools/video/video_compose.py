@@ -2394,6 +2394,8 @@ class VideoCompose(BaseTool):
         visual_spotcheck: dict[str, Any] = {
             "frames_sampled": 0,
             "frame_paths": [],
+            "full_size_evidence": [],
+            "blocking_composition_defects": [],
             "black_frames_detected": False,
             "broken_overlays": False,
             "missing_assets": False,
@@ -2408,6 +2410,7 @@ class VideoCompose(BaseTool):
                 # Sample at 10%, 35%, 65%, 90% of duration
                 sample_points = [0.10, 0.35, 0.65, 0.90]
                 frame_paths = []
+                full_size_evidence = []
                 for i, pct in enumerate(sample_points):
                     ts = round(duration * pct, 2)
                     frame_path = frame_dir / f"review_frame_{i}.png"
@@ -2420,6 +2423,13 @@ class VideoCompose(BaseTool):
                     subprocess.run(cmd, capture_output=True, timeout=15)
                     if frame_path.exists():
                         frame_paths.append(str(frame_path))
+                        full_size_evidence.append({
+                            "scene_id": None,
+                            "timestamp_seconds": ts,
+                            "frame_path": str(frame_path),
+                            "inspected_full_size": False,
+                            "review_notes": "",
+                        })
 
                         # Check for black frames (file size heuristic:
                         # a 1920x1080 PNG of pure black is ~5KB)
@@ -2428,6 +2438,7 @@ class VideoCompose(BaseTool):
 
                 visual_spotcheck["frames_sampled"] = len(frame_paths)
                 visual_spotcheck["frame_paths"] = frame_paths
+                visual_spotcheck["full_size_evidence"] = full_size_evidence
 
                 if len(frame_paths) < 4:
                     visual_spotcheck["issues"].append(

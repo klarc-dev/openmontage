@@ -266,6 +266,7 @@ Checkpoints persist pipeline state as JSON in the project's `pipeline/` director
 - `guided` — checkpoint at key creative stages, auto-proceed on mechanical ones
 - `manual_all` — human approval at every stage
 - `auto_noncreative` — auto-proceed unless stage is creative (assets, edit)
+- `autonomous` — opt-in for unattended runs: a gated stage completes on an `automated_approval` record (reviewer, timestamp, verdict `pass`, evidence paths) stored separately from `human_approved`, so the audit trail never claims a human approval that did not happen
 
 **Functions:** `write_checkpoint()`, `read_checkpoint()`, `get_latest_checkpoint()`, `get_completed_stages()`, `get_next_stage()`
 
