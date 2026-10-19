@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import time
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +35,7 @@ class VideoTrimmer(BaseTool):
     execution_mode = ExecutionMode.SYNC
     determinism = Determinism.DETERMINISTIC
 
-    dependencies = ["cmd:ffmpeg"]
+    dependencies = ["cmd:ffmpeg", "cmd:ffprobe"]
     install_instructions = (
         "Install FFmpeg: https://ffmpeg.org/download.html\n"
         "Windows: winget install FFmpeg\n"
@@ -103,30 +102,74 @@ class VideoTrimmer(BaseTool):
         result.duration_seconds = round(time.time() - start, 2)
         return result
 
+    def _probe_media(self, path: Path) -> dict[str, Any]:
+        proc = self.run_command([
+            "ffprobe", "-v", "error", "-show_streams", "-show_format",
+            "-of", "json", str(path),
+        ])
+        return json.loads(proc.stdout)
+
+    @staticmethod
+    def _media_duration(probe: dict[str, Any]) -> float:
+        value = probe.get("format", {}).get("duration")
+        if value is not None:
+            return float(value)
+        durations = [
+            float(stream["duration"])
+            for stream in probe.get("streams", [])
+            if stream.get("duration") is not None
+        ]
+        return max(durations, default=0.0)
+
     def _cut(self, inputs: dict[str, Any]) -> ToolResult:
         input_path = Path(inputs["input_path"])
         if not input_path.exists():
             return ToolResult(success=False, error=f"Input not found: {input_path}")
 
-        start_s = inputs.get("start_seconds", 0)
+        start_s = float(inputs.get("start_seconds", 0))
         end_s = inputs.get("end_seconds")
-        codec = inputs.get("codec", "copy")
         output_path = Path(
             inputs.get("output_path", str(input_path.with_stem(f"{input_path.stem}_cut")))
         )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        probe = self._probe_media(input_path)
+        has_audio = any(
+            stream.get("codec_type") == "audio"
+            for stream in probe.get("streams", [])
+        )
+        source_duration = self._media_duration(probe)
+        effective_end = float(end_s) if end_s is not None else source_duration
+        segment_duration = max(0.0, effective_end - start_s)
+        video_trim_args = [f"start={start_s}"]
+        audio_trim_args = [f"start={start_s}"]
+        if end_s is not None:
+            video_trim_args.append(f"end={end_s}")
+            audio_trim_args.append(f"end={end_s}")
+
+        filter_parts = [
+            f"[0:v:0]trim={':'.join(video_trim_args)},setpts=PTS-STARTPTS[outv]"
+        ]
+        if has_audio:
+            filter_parts.append(
+                f"[0:a:0]atrim={':'.join(audio_trim_args)},asetpts=PTS-STARTPTS,"
+                "aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[outa]"
+            )
+        else:
+            filter_parts.append(
+                f"anullsrc=r=48000:cl=stereo,atrim=duration={segment_duration},"
+                "asetpts=PTS-STARTPTS[outa]"
+            )
 
         cmd = [
-            "ffmpeg", "-y",
-            "-i", str(input_path),
-            "-ss", str(start_s),
+            "ffmpeg", "-y", "-i", str(input_path),
+            "-filter_complex", ";".join(filter_parts),
+            "-map", "[outv]", "-map", "[outa]",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            str(output_path),
         ]
-        if end_s is not None:
-            cmd.extend(["-to", str(end_s)])
-        if codec == "copy":
-            cmd.extend(["-c", "copy"])
-        else:
-            cmd.extend(["-c:v", codec, "-c:a", "aac"])
-        cmd.append(str(output_path))
 
         self.run_command(cmd)
 
@@ -138,6 +181,8 @@ class VideoTrimmer(BaseTool):
                 "output": str(output_path),
                 "start_seconds": start_s,
                 "end_seconds": end_s,
+                "audio_method": "continuous_aac_encode",
+                "video_method": "decoded_trim_single_encode",
             },
             artifacts=[str(output_path)],
         )
@@ -187,58 +232,92 @@ class VideoTrimmer(BaseTool):
 
         output_path = Path(inputs.get("output_path", "concat_output.mp4"))
 
-        # First, cut each segment to a temp file if start/end are specified
-        temp_files: list[Path] = []
+        # Decode every source into one filter graph, trim on decoded timestamps,
+        # then encode the complete delivery once. Stream-copying arbitrary cuts
+        # can begin before the next video keyframe and silently produce an
+        # audio-only segment. It is also unsafe at independently encoded AAC
+        # boundaries because of encoder priming and decoder state.
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix=".concat-", dir=output_path.parent) as workspace:
-            temp_dir = Path(workspace)
-            for i, seg in enumerate(segments):
-                seg_input = Path(seg["input_path"])
-                if not seg_input.exists():
-                    return ToolResult(success=False, error=f"Segment input not found: {seg_input}")
+        cmd = ["ffmpeg", "-y"]
+        filter_parts: list[str] = []
+        concat_inputs: list[str] = []
 
-                seg_start = seg.get("start_seconds")
-                seg_end = seg.get("end_seconds")
+        for i, seg in enumerate(segments):
+            seg_input = Path(seg["input_path"])
+            if not seg_input.exists():
+                return ToolResult(success=False, error=f"Segment input not found: {seg_input}")
 
-                if seg_start is not None or seg_end is not None:
-                    temp_path = temp_dir / f"seg_{i:04d}{seg_input.suffix}"
-                    cmd = ["ffmpeg", "-y", "-i", str(seg_input)]
-                    if seg_start is not None:
-                        cmd.extend(["-ss", str(seg_start)])
-                    if seg_end is not None:
-                        cmd.extend(["-to", str(seg_end)])
-                    cmd.extend(["-c", "copy", str(temp_path)])
-                    self.run_command(cmd)
-                    temp_files.append(temp_path)
-                else:
-                    temp_files.append(seg_input)
-
-            # Write concat file list
-            list_path = temp_dir / "concat_list.txt"
-            with open(list_path, "w", encoding="utf-8") as f:
-                for tf in temp_files:
-                    # FFmpeg concat demuxer needs forward slashes and escaped quotes
-                    safe_path = str(tf.resolve()).replace("\\", "/")
-                    f.write(f"file '{safe_path}'\n")
-
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "concat", "-safe", "0",
-                "-i", str(list_path),
-                "-c", "copy",
-                str(output_path),
-            ]
-            self.run_command(cmd)
-
-            return ToolResult(
-                success=True,
-                data={
-                    "operation": "concat",
-                    "segment_count": len(segments),
-                    "output": str(output_path),
-                },
-                artifacts=[str(output_path)],
+            cmd.extend(["-i", str(seg_input)])
+            probe = self._probe_media(seg_input)
+            has_audio = any(
+                stream.get("codec_type") == "audio"
+                for stream in probe.get("streams", [])
             )
+            source_duration = self._media_duration(probe)
+            seg_start = seg.get("start_seconds")
+            seg_end = seg.get("end_seconds")
+            effective_start = float(seg_start or 0)
+            effective_end = float(seg_end) if seg_end is not None else source_duration
+            segment_duration = max(0.0, effective_end - effective_start)
+            trim_args: list[str] = []
+            atrim_args: list[str] = []
+            if seg_start is not None:
+                trim_args.append(f"start={seg_start}")
+                atrim_args.append(f"start={seg_start}")
+            if seg_end is not None:
+                trim_args.append(f"end={seg_end}")
+                atrim_args.append(f"end={seg_end}")
+
+            video_trim = f"trim={':'.join(trim_args)}," if trim_args else ""
+            audio_trim = f"atrim={':'.join(atrim_args)}," if atrim_args else ""
+            filter_parts.append(
+                f"[{i}:v:0]{video_trim}setpts=PTS-STARTPTS[v{i}]"
+            )
+            if has_audio:
+                filter_parts.append(
+                    f"[{i}:a:0]{audio_trim}asetpts=PTS-STARTPTS,"
+                    f"aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a{i}]"
+                )
+            else:
+                filter_parts.append(
+                    f"anullsrc=r=48000:cl=stereo,atrim=duration={segment_duration},"
+                    f"asetpts=PTS-STARTPTS[a{i}]"
+                )
+            concat_inputs.extend([f"[v{i}]", f"[a{i}]"])
+
+        filter_parts.append(
+            f"{''.join(concat_inputs)}concat=n={len(segments)}:v=1:a=1[outv][outa]"
+        )
+        cmd.extend([
+            "-filter_complex", ";".join(filter_parts),
+            "-map", "[outv]", "-map", "[outa]",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            str(output_path),
+        ])
+        # A single encode leaves no temporary workspace behind. If it fails,
+        # remove only the partial output this call created, then surface the
+        # original error unchanged.
+        existed = output_path.exists()
+        try:
+            self.run_command(cmd)
+        except Exception:
+            if not existed and output_path.exists():
+                output_path.unlink()
+            raise
+
+        return ToolResult(
+            success=True,
+            data={
+                "operation": "concat",
+                "segment_count": len(segments),
+                "output": str(output_path),
+                "audio_method": "continuous_aac_encode",
+                "video_method": "decoded_trim_single_encode",
+            },
+            artifacts=[str(output_path)],
+        )
 
     @staticmethod
     def _build_atempo_chain(factor: float) -> str:

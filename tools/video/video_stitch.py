@@ -98,6 +98,14 @@ class VideoStitch(BaseTool):
                 "type": "integer",
                 "description": "Target FPS for normalization",
             },
+            "target_sample_rate": {
+                "type": "integer",
+                "description": "Target audio sample rate for normalization. Defaults to the highest rate found across the input clips.",
+            },
+            "target_audio_channels": {
+                "type": "integer",
+                "description": "Target audio channel count for normalization. Defaults to the highest count found across the input clips.",
+            },
             "codec": {"type": "string", "default": "libx264"},
             "crf": {"type": "integer", "default": 23},
             "preset": {"type": "string", "default": "medium"},
@@ -224,13 +232,17 @@ class VideoStitch(BaseTool):
         clips: list[str],
         temp_dir: Path,
         temp_files: list[Path],
+        sample_rate: int = 44100,
+        channels: int = 2,
     ) -> list[str]:
         """Return a list of clip paths where every clip is guaranteed to have
         an audio stream.  Clips that already contain audio are returned as-is.
-        For clips without audio, a silent stereo AAC track is muxed in and the
-        path to the new file is returned instead.  All generated temp files are
-        appended to *temp_files* so the caller can clean them up.
+        For clips without audio, a silent AAC track matching *sample_rate* and
+        *channels* is muxed in and the path to the new file is returned instead.
+        All generated temp files are appended to *temp_files* so the caller can
+        clean them up.
         """
+        layout = "stereo" if channels == 2 else "mono"
         result: list[str] = []
         for i, clip in enumerate(clips):
             if self._clip_has_audio(clip):
@@ -240,9 +252,9 @@ class VideoStitch(BaseTool):
                 cmd = [
                     "ffmpeg", "-y",
                     "-i", str(clip),
-                    "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                    "-f", "lavfi", "-i", f"anullsrc=r={sample_rate}:cl={layout}",
                     "-c:v", "copy",
-                    "-c:a", "aac",
+                    "-c:a", "aac", "-ar", str(sample_rate), "-ac", str(channels),
                     "-shortest",
                     str(augmented),
                 ]
@@ -406,10 +418,11 @@ class VideoStitch(BaseTool):
 
     def _resolve_normalization_target(
         self, inputs: dict[str, Any], probes: list[dict[str, Any]]
-    ) -> tuple[int, int, int, str, str]:
-        """Determine the target resolution, fps, and codecs for normalization.
+    ) -> tuple[int, int, int, str, str, int, int]:
+        """Determine the target resolution, fps, codecs, and audio layout for
+        normalization.
 
-        Returns (width, height, fps, video_codec, audio_codec).
+        Returns (width, height, fps, video_codec, audio_codec, sample_rate, channels).
         """
         # If a media profile is specified, use it
         profile_name = inputs.get("profile")
@@ -417,7 +430,12 @@ class VideoStitch(BaseTool):
             try:
                 from lib.media_profiles import get_profile
                 profile = get_profile(profile_name)
-                return (profile.width, profile.height, profile.fps, profile.codec, profile.audio_codec)
+                return (
+                    profile.width, profile.height, profile.fps,
+                    profile.codec, profile.audio_codec,
+                    getattr(profile, "sample_rate", 48000),
+                    getattr(profile, "audio_channels", 2),
+                )
             except (ImportError, ValueError):
                 pass
 
@@ -438,7 +456,21 @@ class VideoStitch(BaseTool):
         video_codec = inputs.get("codec", "libx264")
         audio_codec = "aac"
 
-        return (width, height, int(fps), video_codec, audio_codec)
+        # Preserve the highest source sample rate and channel count rather than
+        # forcing a fixed layout: downsampling narration to 44.1 kHz during a
+        # concat is a silent quality regression the caller never asked for.
+        sample_rates = [
+            int(probe["sample_rate"]) for probe in probes
+            if str(probe.get("sample_rate") or "").isdigit()
+        ]
+        channel_counts = [
+            int(probe["audio_channels"]) for probe in probes
+            if isinstance(probe.get("audio_channels"), int)
+        ]
+        sample_rate = int(inputs.get("target_sample_rate") or (max(sample_rates) if sample_rates else 48000))
+        channels = int(inputs.get("target_audio_channels") or (max(channel_counts) if channel_counts else 2))
+
+        return (width, height, int(fps), video_codec, audio_codec, sample_rate, channels)
 
     def _normalize_clip(
         self,
@@ -451,6 +483,8 @@ class VideoStitch(BaseTool):
         audio_codec: str,
         crf: int,
         preset: str,
+        sample_rate: int = 48000,
+        channels: int = 2,
     ) -> None:
         """Re-encode a clip to the target format."""
         cmd = [
@@ -459,7 +493,7 @@ class VideoStitch(BaseTool):
             "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
             "-r", str(fps),
             "-c:v", video_codec, "-crf", str(crf), "-preset", preset,
-            "-c:a", audio_codec, "-ar", "44100", "-ac", "2",
+            "-c:a", audio_codec, "-ar", str(sample_rate), "-ac", str(channels),
             "-pix_fmt", "yuv420p",
             str(output_path),
         ]
@@ -471,7 +505,10 @@ class VideoStitch(BaseTool):
             return False
         ref = probes[0]
         for probe in probes[1:]:
-            for key in ("width", "height", "fps", "video_codec", "audio_codec", "sample_rate"):
+            for key in (
+                "width", "height", "fps", "video_codec", "audio_codec",
+                "sample_rate", "audio_channels",
+            ):
                 if ref.get(key) != probe.get(key) and ref.get(key) is not None:
                     return True
         return False
@@ -532,23 +569,32 @@ class VideoStitch(BaseTool):
         try:
             # Normalize clips if needed
             working_clips: list[str] = []
+            target_sample_rate, target_channels = 48000, 2
             if needs_norm or auto_normalize or transition != "cut":
-                width, height, fps, vid_codec, aud_codec = self._resolve_normalization_target(inputs, probes)
+                (
+                    width, height, fps, vid_codec, aud_codec,
+                    target_sample_rate, target_channels,
+                ) = self._resolve_normalization_target(inputs, probes)
                 for i, clip in enumerate(clips):
                     norm_path = temp_dir / f"norm_{i:04d}.mp4"
-                    self._normalize_clip(clip, norm_path, width, height, fps, vid_codec, aud_codec, crf, preset)
+                    self._normalize_clip(
+                        clip, norm_path, width, height, fps, vid_codec, aud_codec,
+                        crf, preset, target_sample_rate, target_channels,
+                    )
                     working_clips.append(str(norm_path))
                     temp_files.append(norm_path)
             else:
                 working_clips = list(clips)
 
-            # For crossfade/fade transitions, ensure every clip has an audio
-            # stream so that the acrossfade filter does not fail.  Image-derived
-            # video clips typically lack audio; we add a silent track for those.
-            if transition in ("crossfade", "fade"):
-                working_clips = self._ensure_audio_for_clips(
-                    working_clips, temp_dir, temp_files,
-                )
+            # Every stitch path needs a uniform audio layout.  The concat
+            # demuxer and the xfade/acrossfade chains all assume each segment
+            # carries an audio stream; a video-only clip (image-derived footage,
+            # a silent brand bumper) otherwise yields a master whose audio stops
+            # early or drops entirely.  Pad those clips with silence up front.
+            working_clips = self._ensure_audio_for_clips(
+                working_clips, temp_dir, temp_files,
+                sample_rate=target_sample_rate, channels=target_channels,
+            )
 
             if transition == "cut":
                 result_data = self._stitch_cut(working_clips, output_path, temp_dir, temp_files)
@@ -589,7 +635,16 @@ class VideoStitch(BaseTool):
         temp_dir: Path,
         temp_files: list[Path],
     ) -> dict[str, Any]:
-        """Simple concat via FFmpeg concat demuxer (no transition)."""
+        """Concat cuts while creating one continuous AAC audio stream.
+
+        Independently encoded AAC clips carry encoder delay, priming, and codec
+        state that are not safe to preserve across arbitrary edit boundaries.
+        Stream-copying the complete container can therefore create intermittent
+        clicks, extreme decoded peaks, or inherited channel-layout errors even
+        when every source clip probes and decodes cleanly.  Video is still
+        copied because normalization has already made it concat-compatible, but
+        audio is decoded and encoded once across the complete timeline.
+        """
         concat_list = temp_dir / "concat_list.txt"
         temp_files.append(concat_list)
         with open(concat_list, "w", encoding="utf-8") as f:
@@ -601,11 +656,13 @@ class VideoStitch(BaseTool):
             "ffmpeg", "-y",
             "-f", "concat", "-safe", "0",
             "-i", str(concat_list),
-            "-c", "copy",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
             str(output_path),
         ]
         self.run_command(cmd)
-        return {"method": "concat_demuxer"}
+        return {"method": "concat_demuxer_audio_reencode"}
 
     def _stitch_crossfade(
         self,
