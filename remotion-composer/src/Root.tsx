@@ -36,6 +36,19 @@ export interface ThemeConfig {
   transitionDuration: number;
   captionHighlightColor: string;
   captionBackgroundColor: string;
+  /**
+   * Where the named font families come from. "bundled" (default) registers only
+   * the fonts shipped in src/fonts; "google" also loads other families from
+   * Google Fonts at render time (network required). See lib/themeFonts.
+   */
+  webFonts?: "bundled" | "google";
+  /** Heading weight for title/stat components; each component keeps its own default when unset. */
+  headingWeight?: number;
+  /** Weight for display titles (hero, text cards); playbook typography.weight_matrix.title. */
+  titleWeight?: number;
+  sectionTitlePanel?: {bg?: string; border?: string; shadow?: string; radius?: number; blur?: number; padding?: string; maxWidth?: number};
+  sectionTitleEdgePadding?: number;
+  captionUpcomingOpacity?: number;
 }
 
 export const THEMES: Record<string, ThemeConfig> = {

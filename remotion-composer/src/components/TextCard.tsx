@@ -5,6 +5,8 @@ interface TextCardProps {
   fontSize?: number;
   color?: string;
   backgroundColor?: string;
+  fontFamily?: string;
+  fontWeight?: number;
 }
 
 export const TextCard: React.FC<TextCardProps> = ({
@@ -12,6 +14,8 @@ export const TextCard: React.FC<TextCardProps> = ({
   fontSize = 64,
   color = "#FFFFFF",
   backgroundColor = "#1F2937",
+  fontFamily = "Inter, system-ui, sans-serif",
+  fontWeight = 700,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -39,8 +43,8 @@ export const TextCard: React.FC<TextCardProps> = ({
           transform: `scale(${scale})`,
           fontSize,
           color,
-          fontFamily: "Inter, system-ui, sans-serif",
-          fontWeight: 700,
+          fontFamily,
+          fontWeight,
           textAlign: "center",
           maxWidth: "80%",
           lineHeight: 1.3,

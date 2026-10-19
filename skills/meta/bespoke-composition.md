@@ -168,6 +168,15 @@ Bespoke compositions are **throwaway and project-local** — they never enter an
 - Author under `projects/<slug>/` (gitignored). The render tool auto-stages your `.tsx`/`.ts`
   source into `remotion-composer/projects/<slug>/` via mtime-skip copy so webpack can resolve
   `node_modules` — your source-of-truth stays under `projects/`.
+- Shared source that is not part of this repository (a brand kit, an organisation's
+  component library) is mounted with `OPENMONTAGE_REMOTION_MOUNTS`, a list of `name=dir`
+  entries separated by the OS path separator (`:` on macOS/Linux, `;` on Windows). Before
+  each atelier render the tool copies each directory's source files into
+  `remotion-composer/src/<name>/` (same extensions and mtime-skip as project staging,
+  removed files are pruned, a `.openmontage-mount` marker identifies the copy), so a
+  composition imports it as `../../src/<name>`. A name that collides with composer
+  source (`components`, `Explainer`, ...) is refused. Mounted copies are untracked build
+  state; delete them freely.
 - Scaffold with `python scripts/scaffold_atelier_project.py <slug>` — emits engine
   plumbing only (entry / Root / blank `Composition.tsx` / `art-direction.md` / props
   template / README). Zero creative content; the placeholder is a deliberately ugly black

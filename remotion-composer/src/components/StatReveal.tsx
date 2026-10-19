@@ -13,6 +13,9 @@ interface StatRevealProps {
   /** Label color. Defaults to near-white; pass the theme's textColor on light themes. */
   textColor?: string;
   position?: "center" | "bottom-right" | "right";
+  headingFont?: string;
+  bodyFont?: string;
+  headingWeight?: number;
 }
 
 export const StatReveal: React.FC<StatRevealProps> = ({
@@ -21,6 +24,9 @@ export const StatReveal: React.FC<StatRevealProps> = ({
   accentColor = "#A78BFA",
   textColor = "#F8FAFC",
   position = "bottom-right",
+  headingFont = "Space Grotesk, Inter, system-ui, sans-serif",
+  bodyFont = "Space Grotesk, Inter, system-ui, sans-serif",
+  headingWeight = 800,
 }) => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
@@ -68,9 +74,9 @@ export const StatReveal: React.FC<StatRevealProps> = ({
         <div
           style={{
             fontSize: 96,
-            fontWeight: 800,
+            fontWeight: headingWeight,
             color: accentColor,
-            fontFamily: "Space Grotesk, Inter, system-ui, sans-serif",
+            fontFamily: headingFont,
             lineHeight: 1,
             textShadow: `0 0 ${interpolate(glow, [0, 1], [0, 30])}px ${accentColor}66, 0 4px 12px rgba(0,0,0,0.5)`,
           }}
@@ -83,7 +89,7 @@ export const StatReveal: React.FC<StatRevealProps> = ({
               fontSize: 22,
               fontWeight: 500,
               color: textColor,
-              fontFamily: "Space Grotesk, Inter, system-ui, sans-serif",
+              fontFamily: bodyFont,
               marginTop: 8,
               opacity: spring({
                 frame: frame - 10,

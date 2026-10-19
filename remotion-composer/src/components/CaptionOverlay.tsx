@@ -27,6 +27,12 @@ type CaptionOverlayProps = {
   highlightColor?: string;
   backgroundColor?: string;
   fontFamily?: string;
+  // Bottom clearance in pixels. Vertical social video should reserve platform UI.
+  paddingBottom?: number;
+  // Extra horizontal gap in pixels between words, on top of the separator.
+  wordGap?: number;
+  // Opacity (0-1) of words not yet spoken. 0.6 keeps the previous look.
+  upcomingOpacity?: number;
   // Separator rendered between words. Space-delimited languages want the
   // default " "; CJK languages (no inter-word spacing) should pass "".
   wordSeparator?: string;
@@ -65,8 +71,12 @@ const PageRenderer: React.FC<{
   highlightColor: string;
   backgroundColor: string;
   fontFamily: string;
+  paddingBottom: number;
+  wordGap: number;
+  upcomingOpacity: number;
   wordSeparator: string;
-}> = ({ page, fontSize, color, highlightColor, backgroundColor, fontFamily, wordSeparator }) => {
+}> = ({ page, fontSize, color, highlightColor, backgroundColor, fontFamily, paddingBottom, wordGap, upcomingOpacity, wordSeparator }) => {
+  const upcomingAlpha = Math.round(Math.min(1, Math.max(0, upcomingOpacity)) * 255).toString(16).padStart(2, "0").toUpperCase();
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
@@ -84,7 +94,7 @@ const PageRenderer: React.FC<{
       style={{
         justifyContent: "flex-end",
         alignItems: "center",
-        paddingBottom: 80,
+        paddingBottom,
       }}
     >
       <div
@@ -119,7 +129,8 @@ const PageRenderer: React.FC<{
                     // previous behavior; for CJK it prevents mid-word breaks.
                     display: "inline-block",
                     whiteSpace: "nowrap",
-                    color: isActive ? highlightColor : isPast ? color : `${color}99`,
+                    marginRight: i < page.words.length - 1 ? wordGap : 0,
+                    color: isActive ? highlightColor : isPast ? color : `${color}${upcomingAlpha}`,
                     transition: "none", // CSS transitions forbidden in Remotion
                     textShadow: isActive
                       ? `0 0 20px ${highlightColor}66, 0 2px 4px rgba(0,0,0,0.5)`
@@ -146,6 +157,9 @@ export const CaptionOverlay: React.FC<CaptionOverlayProps> = ({
   highlightColor = "#22D3EE",
   backgroundColor = "rgba(15, 23, 42, 0.75)",
   fontFamily = "Space Grotesk, Inter, system-ui, sans-serif",
+  paddingBottom = 80,
+  wordGap = 0,
+  upcomingOpacity = 0.6,
   wordSeparator = " ",
 }) => {
   const { fps } = useVideoConfig();
@@ -170,6 +184,9 @@ export const CaptionOverlay: React.FC<CaptionOverlayProps> = ({
               highlightColor={highlightColor}
               backgroundColor={backgroundColor}
               fontFamily={fontFamily}
+              paddingBottom={paddingBottom}
+              wordGap={wordGap}
+              upcomingOpacity={upcomingOpacity}
               wordSeparator={wordSeparator}
             />
           </Sequence>

@@ -76,6 +76,12 @@
             "caption": { "type": "integer", "minimum": 100, "maximum": 900 }
           },
           "additionalProperties": false
+        },
+        "web_fonts": {
+          "description": "Where Remotion compositions get the named font families. 'bundled' (default) uses only the fonts shipped in remotion-composer/src/fonts and leaves other families to CSS, so a render needs no network. 'google' loads every named family from the Google Fonts catalogue at render time (network required).",
+          "type": "string",
+          "enum": ["bundled", "google"],
+          "default": "bundled"
         }
       },
       "additionalProperties": false
@@ -184,7 +190,8 @@
         "section_title": { "$ref": "#/$defs/overlay_style" },
         "stat_reveal": { "$ref": "#/$defs/overlay_style" },
         "hero_title": { "$ref": "#/$defs/overlay_style" },
-        "provider_chip": { "$ref": "#/$defs/overlay_style" }
+        "provider_chip": { "$ref": "#/$defs/overlay_style" },
+        "captions": { "$ref": "#/$defs/overlay_style" }
       },
       "additionalProperties": false
     },
@@ -274,6 +281,30 @@
         "accent": {
           "type": "string",
           "description": "Accent color for overlay types that render one (maps to the renderer's accentColor prop)."
+        },
+        "panel": {
+          "type": "object",
+          "description": "Optional raised panel drawn behind the overlay (section titles in corner positions).",
+          "properties": {
+            "bg": { "type": "string" },
+            "border": { "type": "string" },
+            "shadow": { "type": "string" },
+            "radius": { "type": "number" },
+            "blur": { "type": "number" },
+            "padding": { "type": "string" },
+            "max_width": { "type": "number" }
+          },
+          "additionalProperties": false
+        },
+        "edge_padding": {
+          "type": "number",
+          "description": "Distance from the frame edge for corner-positioned overlays (px)."
+        },
+        "upcoming_opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Captions: opacity of words not yet spoken (default 0.6)."
         }
       },
       "additionalProperties": false

@@ -13,7 +13,24 @@ interface SectionTitleProps {
   /** Title color. Defaults to near-white; pass the theme's textColor on light themes. */
   textColor?: string;
   position?: "top-left" | "bottom-left" | "center";
+  headingFont?: string;
+  bodyFont?: string;
+  headingWeight?: number;
+  /** Distance from the frame edge for corner positions (px). */
+  edgePadding?: number;
+  /** Optional raised panel behind corner-positioned titles (playbook overlays.section_title.panel). */
+  panel?: SectionTitlePanel;
 }
+
+export type SectionTitlePanel = {
+  bg?: string;
+  border?: string;
+  shadow?: string;
+  radius?: number;
+  blur?: number;
+  padding?: string;
+  maxWidth?: number;
+};
 
 export const SectionTitle: React.FC<SectionTitleProps> = ({
   title,
@@ -21,6 +38,11 @@ export const SectionTitle: React.FC<SectionTitleProps> = ({
   accentColor = "#22D3EE",
   textColor = "#F8FAFC",
   position = "top-left",
+  headingFont = "Space Grotesk, Inter, system-ui, sans-serif",
+  bodyFont = "Space Grotesk, Inter, system-ui, sans-serif",
+  headingWeight = 700,
+  edgePadding = 60,
+  panel,
 }) => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
@@ -45,13 +67,26 @@ export const SectionTitle: React.FC<SectionTitleProps> = ({
     position === "center"
       ? { justifyContent: "center", alignItems: "center" }
       : position === "bottom-left"
-      ? { justifyContent: "flex-end", alignItems: "flex-start", padding: 60 }
-      : { justifyContent: "flex-start", alignItems: "flex-start", padding: 60 };
+      ? { justifyContent: "flex-end", alignItems: "flex-start", padding: edgePadding }
+      : { justifyContent: "flex-start", alignItems: "flex-start", padding: edgePadding };
+  const panelStyles: React.CSSProperties =
+    panel && position !== "center"
+      ? {
+          maxWidth: panel.maxWidth,
+          padding: panel.padding ?? "18px 24px 20px",
+          borderRadius: panel.radius ?? 16,
+          background: panel.bg,
+          border: panel.border ? `1px solid ${panel.border}` : undefined,
+          boxShadow: panel.shadow,
+          backdropFilter: panel.blur ? `blur(${panel.blur}px)` : undefined,
+        }
+      : {};
 
   return (
     <AbsoluteFill style={positionStyles}>
       <div
         style={{
+          ...panelStyles,
           opacity,
           transform: `translateX(${interpolate(slideIn, [0, 1], [-40, 0])}px)`,
         }}
@@ -69,9 +104,9 @@ export const SectionTitle: React.FC<SectionTitleProps> = ({
         <div
           style={{
             fontSize: 28,
-            fontWeight: 700,
+            fontWeight: headingWeight,
             color: textColor,
-            fontFamily: "Space Grotesk, Inter, system-ui, sans-serif",
+            fontFamily: headingFont,
             letterSpacing: "0.05em",
             textTransform: "uppercase",
             textShadow: "0 2px 8px rgba(0,0,0,0.6)",
@@ -85,7 +120,7 @@ export const SectionTitle: React.FC<SectionTitleProps> = ({
               fontSize: 18,
               fontWeight: 400,
               color: accentColor,
-              fontFamily: "Space Grotesk, Inter, system-ui, sans-serif",
+              fontFamily: bodyFont,
               marginTop: 4,
               opacity: spring({
                 frame: frame - 8,

@@ -1017,6 +1017,11 @@ class VideoCompose(BaseTool):
                     ),
                 )
 
+        try:
+            self._stage_remotion_mounts(composer_dir)
+        except (OSError, ValueError) as e:
+            return ToolResult(success=False, error=f"atelier source mount failed: {e}")
+
         output_path = Path(inputs.get("output_path", "renders/output.mp4")).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1261,6 +1266,100 @@ class VideoCompose(BaseTool):
             "issues": issues,
         }
 
+    # Marker written into every mounted source dir, so a mount is never confused
+    # with composer source and a stale mount is recognisable.
+    _REMOTION_MOUNT_MARKER = ".openmontage-mount"
+    _REMOTION_MOUNT_NAME_RE = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
+    @classmethod
+    def _remotion_mounts(cls) -> list[tuple[str, Path]]:
+        """Parse OPENMONTAGE_REMOTION_MOUNTS.
+
+        The variable lists ``name=dir`` entries separated by ``os.pathsep``. Each
+        directory holds shared composition source (a brand kit, a component
+        library) that lives outside this repository; it is mounted at
+        ``remotion-composer/src/<name>/`` so atelier compositions import it as
+        ``../../src/<name>`` exactly as they import composer source.
+        """
+        import os
+        import re as _re
+
+        raw = os.environ.get("OPENMONTAGE_REMOTION_MOUNTS", "").strip()
+        mounts: list[tuple[str, Path]] = []
+        seen: set[str] = set()
+        for entry in filter(None, (part.strip() for part in raw.split(os.pathsep))):
+            name, sep, directory = entry.partition("=")
+            name, directory = name.strip(), directory.strip()
+            if not sep or not directory or not _re.match(cls._REMOTION_MOUNT_NAME_RE, name):
+                raise ValueError(f"invalid OPENMONTAGE_REMOTION_MOUNTS entry {entry!r}; expected name=dir")
+            if name in seen:
+                raise ValueError(f"duplicate OPENMONTAGE_REMOTION_MOUNTS name {name!r}")
+            source = Path(directory).expanduser().resolve()
+            if not source.is_dir():
+                raise ValueError(f"OPENMONTAGE_REMOTION_MOUNTS {name!r}: {source} is not a directory")
+            seen.add(name)
+            mounts.append((name, source))
+        return mounts
+
+    def _stage_remotion_mounts(self, composer_dir: Path) -> list[Path]:
+        """Copy every mounted source dir into ``remotion-composer/src/<name>/``.
+
+        Files are copied, not linked: the bundler resolves ``remotion`` and
+        ``react`` by walking up from a module's real location, so a link to a
+        directory outside the composer would not find node_modules (the same
+        reason atelier projects are staged by copy). Only source files are
+        copied (``_ATELIER_STAGE_EXTS``), with the same mtime-skip; files that
+        disappeared from the source are removed from the mount. A name whose
+        destination already exists without the mount marker belongs to the
+        composer itself (``components``, ``Explainer``...) and is refused.
+        Returns the mounted directories.
+        """
+        import shutil
+
+        src_root = composer_dir / "src"
+        mounted: list[Path] = []
+        for name, source in self._remotion_mounts():
+            dest = src_root / name
+            marker = dest / self._REMOTION_MOUNT_MARKER
+            clashes = [dest.with_name(name + ext) for ext in self._ATELIER_STAGE_EXTS]
+            if (dest.exists() and not marker.exists()) or any(c.exists() for c in clashes):
+                raise ValueError(
+                    f"mount name {name!r} collides with composer source at {dest}; choose another name"
+                )
+            dest.mkdir(parents=True, exist_ok=True)
+            wanted: set[Path] = set()
+            for src in source.rglob("*"):
+                if not src.is_file() or src.suffix.lower() not in self._ATELIER_STAGE_EXTS:
+                    continue
+                rel = src.relative_to(source)
+                wanted.add(rel)
+                dst = dest / rel
+                try:
+                    if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
+                        continue
+                except OSError:
+                    pass
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+            for stale in [p for p in dest.rglob("*") if p.is_file() and p != marker]:
+                if stale.relative_to(dest) not in wanted:
+                    stale.unlink()
+            marker.write_text(f"{source}\n", encoding="utf-8")
+            mounted.append(dest)
+        return mounted
+
+    @staticmethod
+    def _is_light_hex(color: str) -> bool:
+        """True when a #RRGGBB / #RGB color has a light relative luminance."""
+        value = (color or "").strip().lstrip("#")
+        if len(value) == 3:
+            value = "".join(ch * 2 for ch in value)
+        try:
+            r, g, b = (int(value[i:i + 2], 16) / 255 for i in (0, 2, 4))
+        except (ValueError, IndexError):
+            return True
+        return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.6
+
     @staticmethod
     def _build_theme_from_playbook(
         playbook_name: str | None,
@@ -1304,15 +1403,21 @@ class VideoCompose(BaseTool):
 
             bg = palette.get("background", "#FFFFFF")
             text = palette.get("text", "#1F2937")
-            surface = palette.get("surface", bg)
+            # Raised surface: an explicit palette surface, else the stat-card
+            # background the playbook declares for its overlays, else the ground.
+            overlays = playbook.get("overlays", {}) or {}
+            declared_surface = palette.get("surface") or (overlays.get("stat_card") or {}).get("bg")
+            surface = declared_surface or bg
             muted = palette.get("muted", "#6B7280")
 
-            # Build chart colors from all palette entries
-            chart_colors = []
-            for key in ["primary", "accent", "secondary", "success", "warning", "info"]:
-                val = palette.get(key)
-                if val:
-                    chart_colors.append(val[0] if isinstance(val, list) else val)
+            # Prefer the schema's explicit chart palette. Fall back to the visual
+            # palette for older playbooks that do not declare one.
+            chart_colors = list(playbook.get("chart_palette", []))
+            if not chart_colors:
+                for key in ["primary", "accent", "secondary", "success", "warning", "info"]:
+                    val = palette.get(key)
+                    if val:
+                        chart_colors.append(val[0] if isinstance(val, list) else val)
             if len(chart_colors) < 3:
                 chart_colors = [primary, accent, "#10B981", "#8B5CF6", "#EC4899", "#06B6D4"]
 
@@ -1326,18 +1431,49 @@ class VideoCompose(BaseTool):
                 "headingFont": typo.get("headings", {}).get("font", "Inter"),
                 "bodyFont": typo.get("body", {}).get("font", "Inter"),
                 "monoFont": typo.get("code", {}).get("font", "JetBrains Mono"),
+                # Opt-in render-time loading of the named families (see the
+                # playbook schema typography.web_fonts); "bundled" stays offline.
+                "webFonts": typo.get("web_fonts", "bundled"),
                 "chartColors": chart_colors[:6],
                 "springConfig": {"damping": 20, "stiffness": 120, "mass": 1},
                 "transitionDuration": 0.4,
             }
+            # Weights: the playbook's weight matrix when declared (title for
+            # display titles, heading for section/stat headings), else the
+            # headings weight for both.
+            matrix = typo.get("weight_matrix") or {}
+            base_weight = (typo.get("headings") or {}).get("weight")
+            heading_weight = matrix.get("heading", base_weight)
+            title_weight = matrix.get("title", base_weight)
+            if isinstance(heading_weight, int):
+                theme["headingWeight"] = heading_weight
+            if isinstance(title_weight, int):
+                theme["titleWeight"] = title_weight
+            overlay_styles = playbook.get("overlays", {}) or {}
+            section_style = overlay_styles.get("section_title") or {}
+            if isinstance(section_style.get("panel"), dict):
+                theme["sectionTitlePanel"] = {
+                    "maxWidth" if k == "max_width" else k: v for k, v in section_style["panel"].items()
+                }
+            if isinstance(section_style.get("edge_padding"), (int, float)):
+                theme["sectionTitleEdgePadding"] = section_style["edge_padding"]
+            caption_style = overlay_styles.get("captions") or {}
+            if isinstance(caption_style.get("upcoming_opacity"), (int, float)):
+                theme["captionUpcomingOpacity"] = float(caption_style["upcoming_opacity"])
 
             # Derive caption colors from the palette
             theme["captionHighlightColor"] = primary
-            # Caption background: semi-transparent version of the bg color
-            theme["captionBackgroundColor"] = (
-                f"rgba(255, 255, 255, 0.85)" if bg.upper() in ("#FFFFFF", "#FAFAFA", "#F9FAFB")
-                else f"rgba(15, 23, 42, 0.75)"
-            )
+            # Captions sit on the playbook's raised surface when it declares one,
+            # so warm or tinted light grounds keep their identity. Without one,
+            # pick a translucent bar from the ground's luminance instead of
+            # assuming that only pure-white grounds are light.
+            if declared_surface:
+                theme["captionBackgroundColor"] = declared_surface
+            else:
+                theme["captionBackgroundColor"] = (
+                    "rgba(255, 255, 255, 0.85)" if VideoCompose._is_light_hex(bg)
+                    else "rgba(15, 23, 42, 0.75)"
+                )
 
             # Motion style from playbook. `pace` is an identity field in the
             # playbook schema; motion carries pacing_rules, not a pace enum.
@@ -1345,9 +1481,16 @@ class VideoCompose(BaseTool):
             if pace == "fast":
                 theme["springConfig"] = {"damping": 12, "stiffness": 80, "mass": 1}
                 theme["transitionDuration"] = 0.3
-            elif pace == "slow":
+            elif pace in ("slow", "deliberate"):
                 theme["springConfig"] = {"damping": 25, "stiffness": 150, "mass": 1}
                 theme["transitionDuration"] = 0.6
+            # An explicit transition length in the playbook wins over the
+            # pace-derived default.
+            declared = ((playbook.get("motion") or {}).get("pacing_rules") or {}).get(
+                "transition_duration_seconds"
+            )
+            if isinstance(declared, (int, float)) and declared > 0:
+                theme["transitionDuration"] = float(declared)
 
         # Fallback: try to extract from edit_decisions metadata
         if not theme and composition_data:

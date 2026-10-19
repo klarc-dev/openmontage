@@ -10,6 +10,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import { loadSpaceGrotesk } from "./lib/localFonts";
+import { loadThemeFonts } from "./lib/themeFonts";
 import { TextCard } from "./components/TextCard";
 import { StatCard } from "./components/StatCard";
 import { CalloutBox } from "./components/CalloutBox";
@@ -274,6 +275,7 @@ interface Overlay {
   text?: string;
   subtitle?: string;
   accentColor?: string;
+  textColor?: string;
   position?: string;
   // provider_chip
   providers?: string[];
@@ -590,12 +592,12 @@ const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme 
   // Explicit component types — use theme-derived defaults for colors
   if (cut.type === "text_card" && cut.text) {
     return maybeWrapWithBg(
-      <TextCard text={cut.text} fontSize={cut.fontSize} color={textColor} backgroundColor={bgColor} />
+      <TextCard text={cut.text} fontSize={cut.fontSize} color={textColor} backgroundColor={bgColor} fontFamily={theme.headingFont} fontWeight={theme.titleWeight ?? theme.headingWeight} />
     );
   }
   if (cut.type === "stat_card" && cut.stat) {
     return maybeWrapWithBg(
-      <StatCard stat={cut.stat} subtitle={cut.subtitle} accentColor={accent} backgroundColor={bgColor} />
+      <StatCard stat={cut.stat} subtitle={cut.subtitle} accentColor={accent} backgroundColor={bgColor} headingFont={theme.headingFont} bodyFont={theme.bodyFont} headingWeight={theme.headingWeight} />
     );
   }
   if (cut.type === "callout" && cut.text) {
@@ -603,7 +605,7 @@ const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme 
       <CalloutBox
         text={cut.text} type={cut.callout_type} title={cut.title}
         borderColor={accent} backgroundColor={cut.backgroundColor || theme.surfaceColor}
-        textColor={textColor} containerBackgroundColor={bgColor}
+        textColor={textColor} containerBackgroundColor={bgColor} fontFamily={theme.bodyFont}
       />
     );
   }
@@ -613,7 +615,7 @@ const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme 
         leftLabel={cut.leftLabel} rightLabel={cut.rightLabel}
         leftValue={cut.leftValue} rightValue={cut.rightValue}
         title={cut.title} backgroundColor={bgColor} textColor={textColor}
-        cardBackgroundColor={cut.cardBackgroundColor || theme.surfaceColor}
+        cardBackgroundColor={cut.cardBackgroundColor || theme.surfaceColor} fontFamily={theme.bodyFont}
       />
     );
   }
@@ -626,6 +628,9 @@ const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme 
         textColor={textColor}
         subtitleColor={theme.mutedTextColor}
         scrimBackground={heroScrim(theme)}
+        headingFont={theme.headingFont}
+        headingWeight={theme.titleWeight ?? theme.headingWeight}
+        bodyFont={theme.bodyFont}
       />
     );
   }
@@ -768,7 +773,7 @@ const SceneRenderer: React.FC<{ cut: Cut; theme: ThemeConfig }> = ({ cut, theme 
   }
 
   // No source, no type — render as text card with cut id as fallback
-  return <TextCard text={cut.text || cut.id} color={textColor} backgroundColor={bgColor} />;
+  return <TextCard text={cut.text || cut.id} color={textColor} backgroundColor={bgColor} fontFamily={theme.headingFont} fontWeight={theme.titleWeight ?? theme.headingWeight} />;
 };
 
 // ---------------------------------------------------------------------------
@@ -785,8 +790,13 @@ const OverlayRenderer: React.FC<{ overlay: Overlay; theme: ThemeConfig }> = ({
         title={overlay.text ?? ""}
         subtitle={overlay.subtitle}
         accentColor={overlay.accentColor || theme.accentColor}
-        textColor={theme.textColor}
+        textColor={overlay.textColor || theme.textColor}
         position={(overlay.position as any) || "top-left"}
+        headingFont={theme.headingFont}
+        headingWeight={theme.headingWeight}
+        edgePadding={theme.sectionTitleEdgePadding}
+        panel={theme.sectionTitlePanel}
+        bodyFont={theme.bodyFont}
       />
     );
   }
@@ -798,6 +808,9 @@ const OverlayRenderer: React.FC<{ overlay: Overlay; theme: ThemeConfig }> = ({
         accentColor={overlay.accentColor || theme.accentColor}
         textColor={theme.textColor}
         position={(overlay.position as any) || "bottom-right"}
+        headingFont={theme.headingFont}
+        headingWeight={theme.headingWeight}
+        bodyFont={theme.bodyFont}
       />
     );
   }
@@ -810,6 +823,9 @@ const OverlayRenderer: React.FC<{ overlay: Overlay; theme: ThemeConfig }> = ({
         textColor={theme.textColor}
         subtitleColor={theme.mutedTextColor}
         scrimBackground={heroScrim(theme)}
+        headingFont={theme.headingFont}
+        headingWeight={theme.titleWeight ?? theme.headingWeight}
+        bodyFont={theme.bodyFont}
       />
     );
   }
@@ -837,6 +853,9 @@ export const Explainer: React.FC<ExplainerProps> = (props) => {
 
   // Resolve theme from props — playbook name, theme name, or custom themeConfig
   const theme = resolveTheme(props as Record<string, unknown>);
+  // Register the theme's heading/body/mono families before frames render, so a
+  // playbook can name its own type instead of inheriting Space Grotesk.
+  loadThemeFonts(theme);
 
   return (
     <AbsoluteFill style={{ background: theme.backgroundColor, fontFamily: theme.headingFont || fontFamily }}>
@@ -878,6 +897,8 @@ export const Explainer: React.FC<ExplainerProps> = (props) => {
           color={theme.textColor}
           highlightColor={theme.captionHighlightColor}
           backgroundColor={theme.captionBackgroundColor}
+          fontFamily={theme.bodyFont}
+          upcomingOpacity={theme.captionUpcomingOpacity}
         />
       )}
 
