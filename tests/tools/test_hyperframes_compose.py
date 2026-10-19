@@ -801,6 +801,44 @@ def test_transcript_comparison_passes_clean_audio(tmp_path):
     assert not any("tts punctuation leak" in i.lower() for i in result["issues"])
 
 
+def test_transcript_comparison_normalizes_words_nested_under_segments(tmp_path):
+    """Provider-compatible transcripts may put word timing records under
+    segments[].words instead of the canonical top-level word_timestamps."""
+    transcript_path = tmp_path / "nested-transcript.json"
+    transcript_path.write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {
+                        "start": 0.0,
+                        "end": 1.0,
+                        "words": [
+                            {"word": "The", "start": 0.0, "end": 0.2},
+                            {"word": "quick", "start": 0.2, "end": 0.5},
+                        ],
+                    },
+                    {
+                        "start": 1.0,
+                        "end": 2.0,
+                        "words": [
+                            {"word": "fox", "start": 1.0, "end": 1.3},
+                        ],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = VideoCompose._compare_transcript_to_script(
+        transcript_path, "The quick fox"
+    )
+
+    assert result["transcript_word_count"] == 3
+    assert result["word_accuracy"] == 1.0
+    assert result["transcript_matches_script"] is True
+
+
 def test_transcript_comparison_graceful_when_inputs_missing(tmp_path):
     """When transcript or script is unavailable, the check should NOT
     crash — it should record the skip in issues so the silence is visible."""

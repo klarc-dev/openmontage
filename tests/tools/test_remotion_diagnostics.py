@@ -126,3 +126,39 @@ def test_no_timeout_flag_when_not_requested(tool, tmp_path, monkeypatch):
 
     assert not any(str(c).startswith("--timeout") for c in seen["cmd"])
     assert seen["timeout"] == 600
+
+
+@pytest.mark.parametrize(
+    "composition_data",
+    [
+        {"composition_mode": "atelier", "bespoke": {"entry": "projects/demo/index.tsx"}},
+        {"renderer_family": "bespoke", "bespoke": {"entry": "projects/demo/index.tsx"}},
+        {"bespoke": {"entry": "projects/demo/index.tsx", "composition_id": "Demo"}},
+    ],
+)
+def test_direct_remotion_render_rejects_atelier_inputs(tool, tmp_path, composition_data):
+    result = tool.execute(
+        {
+            "operation": "remotion_render",
+            "composition_data": composition_data,
+            "output_path": str(tmp_path / "out.mp4"),
+        }
+    )
+
+    assert result.success is False
+    assert "operation='render'" in result.error
+    assert "atelier" in result.error.lower()
+
+
+def test_direct_remotion_render_rejects_top_level_atelier_entry(tool, tmp_path):
+    result = tool.execute(
+        {
+            "operation": "remotion_render",
+            "composition_data": {"cuts": []},
+            "atelier_entry": "projects/demo/index.tsx",
+            "output_path": str(tmp_path / "out.mp4"),
+        }
+    )
+
+    assert result.success is False
+    assert "operation='render'" in result.error

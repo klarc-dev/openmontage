@@ -34,9 +34,11 @@ import contextlib
 import json
 import hashlib
 import logging
+import re
 import secrets
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -1025,6 +1027,11 @@ class VideoCompose(BaseTool):
         output_path = Path(inputs.get("output_path", "renders/output.mp4")).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        if not bespoke.get("skip_typecheck"):
+            typecheck = self._typecheck_atelier_entry(effective_entry, composer_dir)
+            if typecheck is not None:
+                return typecheck
+
         cmd = ["npx", "remotion", "render", str(effective_entry), str(comp_id), str(output_path)]
 
         props_path = bespoke.get("props_path")
@@ -1121,6 +1128,87 @@ class VideoCompose(BaseTool):
     # artifacts) and is referenced via --public-dir or absolute paths.
     _ATELIER_STAGE_EXTS = {".tsx", ".ts", ".jsx", ".js", ".css"}
 
+    def _typecheck_atelier_entry(self, entry: Path, composer_dir: Path) -> Optional[ToolResult]:
+        """Type-check an atelier composition before rendering it.
+
+        Remotion bundles with esbuild, which strips types without checking
+        them. A composition that reads a token or prop that does not exist
+        therefore bundles cleanly and renders `undefined`, which CSS ignores:
+        the text silently inherits a fallback size or color. Nothing fails and
+        the defect only shows to a human watching the frame at full size.
+
+        Running tsc here turns that silent visual defect into a render error.
+        The check uses the composer's own compiler and type packages, so it
+        needs no per-project configuration. Returns None when the entry is
+        clean, or a failed ToolResult naming the first errors.
+        """
+        tsc = composer_dir / "node_modules" / ".bin" / "tsc"
+        if not tsc.exists():
+            return ToolResult(
+                success=False,
+                error=(
+                    f"TypeScript compiler not found at {tsc}; atelier renders are "
+                    f"type-checked before bundling. Run `cd remotion-composer && npm install`."
+                ),
+            )
+
+        modules = composer_dir / "node_modules"
+        config = {
+            "compilerOptions": {
+                "target": "ES2020",
+                "module": "ESNext",
+                "moduleResolution": "bundler",
+                "jsx": "react-jsx",
+                "strict": True,
+                "noEmit": True,
+                "skipLibCheck": True,
+                "esModuleInterop": True,
+                "types": [],
+                "typeRoots": [str(modules / "@types")],
+                # Staged projects are junctions: resolve the composer's packages
+                # explicitly so the check never depends on the link's real path.
+                "paths": {
+                    "react": [str(modules / "@types" / "react")],
+                    "react/*": [str(modules / "@types" / "react" / "*")],
+                    "remotion": [str(modules / "remotion")],
+                    "remotion/*": [str(modules / "remotion" / "*")],
+                },
+            },
+            "files": [str(entry)],
+        }
+        # A throwaway config outside the project, so a typecheck never writes
+        # into the (junction-linked) source tree.
+        with tempfile.TemporaryDirectory(prefix="om-typecheck-") as tmp:
+            tsconfig = Path(tmp) / "tsconfig.json"
+            try:
+                tsconfig.write_text(json.dumps(config, indent=2), encoding="utf-8")
+                completed = subprocess.run(
+                    [str(tsc), "-p", str(tsconfig), "--pretty", "false"],
+                    cwd=composer_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return ToolResult(success=False, error=f"Atelier typecheck could not run: {exc}")
+
+        if completed.returncode == 0:
+            return None
+
+        diagnostics = [
+            line for line in (completed.stdout + completed.stderr).splitlines() if "error TS" in line
+        ]
+        shown = "\n".join(diagnostics[:10]) or (completed.stdout + completed.stderr).strip()[:2000]
+        more = f"\n... and {len(diagnostics) - 10} more" if len(diagnostics) > 10 else ""
+        return ToolResult(
+            success=False,
+            error=(
+                "Atelier composition failed type-checking; refusing to render because "
+                "esbuild would bundle it anyway and render the broken values silently.\n"
+                f"{shown}{more}"
+            ),
+        )
+
     def _stage_atelier_project(self, entry_path: Path, composer_dir: Path) -> Path:
         """Auto-stage a bespoke project under remotion-composer/projects/<slug>/.
 
@@ -1136,24 +1224,16 @@ class VideoCompose(BaseTool):
         JSON) stay only in the real project dir and are referenced via
         --public-dir or absolute paths in props.
 
-        Resolves the slug as the first path segment under a `projects/` ancestor;
-        falls back to the entry's parent directory name. Returns the staged entry
-        path.
+        The staging directory is keyed on the complete project directory (see
+        ``_atelier_staging_key``), so nested layouts such as
+        ``projects/<group>/<a>/<b>`` never share a staging dir. Returns the staged
+        entry path.
         """
         import shutil
 
         real_project_dir = entry_path.parent.resolve()
 
-        # Derive a stable slug. Prefer the first segment under a `projects/` ancestor.
-        slug = real_project_dir.name
-        try:
-            parts = real_project_dir.parts
-            if "projects" in parts:
-                i = parts.index("projects")
-                if i + 1 < len(parts):
-                    slug = parts[i + 1]
-        except Exception:
-            pass
+        slug = self._atelier_staging_key(real_project_dir)
 
         staging_root = composer_dir / "projects"
         staging_root.mkdir(parents=True, exist_ok=True)
@@ -1190,6 +1270,28 @@ class VideoCompose(BaseTool):
             shutil.copy2(src, dst)
 
         return staging_dir / entry_path.name
+
+    @staticmethod
+    def _atelier_staging_key(project_dir: Path) -> str:
+        """Collision-free staging directory name for an atelier project.
+
+        Keying on the first segment under ``projects/`` made every project of a
+        nested layout (``projects/<group>/<topic>``) stage into the same
+        directory, so concurrent renders overwrote each other's sources. The key
+        keeps the last two path segments under the projects root for
+        readability and appends a hash of the full resolved directory, which is
+        unique per project and stable across renders.
+        """
+        real = project_dir.resolve()
+        parts = list(real.parts)
+        if "projects" in parts:
+            below = parts[parts.index("projects") + 1:]
+        else:
+            below = parts[-1:]
+        readable = "-".join(below[-2:]) or real.name or "project"
+        readable = re.sub(r"[^A-Za-z0-9._-]+", "-", readable).strip("-.") or "project"
+        digest = hashlib.sha256(str(real).encode("utf-8")).hexdigest()[:10]
+        return f"{readable[:80]}-{digest}"
 
     # Stock-registry import patterns that violate the atelier doctrine.
     # Any of these inside a bespoke project tree means a creative component
@@ -2091,17 +2193,37 @@ class VideoCompose(BaseTool):
         types, and transitions using React-based frame-accurate rendering.
         Accepts edit_decisions (with resolved file paths) or raw composition_data.
         """
-        if not shutil.which("npx"):
-            return ToolResult(
-                success=False,
-                error="npx not found. Install Node.js to use Remotion rendering.",
-            )
-
         composition_data = inputs.get("edit_decisions") or inputs.get("composition_data")
         if not composition_data:
             return ToolResult(
                 success=False,
                 error="edit_decisions or composition_data required for remotion_render",
+            )
+
+        bespoke = composition_data.get("bespoke") or inputs.get("bespoke") or {}
+        atelier_requested = any([
+            composition_data.get("composition_mode") == "atelier",
+            composition_data.get("renderer_family") == "bespoke",
+            bool(bespoke.get("entry")),
+            bool(inputs.get("atelier_entry")),
+            bool(inputs.get("entry")),
+        ])
+        if atelier_requested:
+            return ToolResult(
+                success=False,
+                error=(
+                    "operation='remotion_render' is the low-level stock-composition path "
+                    "and cannot accept atelier inputs or a bespoke entry. Use the "
+                    "high-level operation='render' with edit_decisions.composition_mode="
+                    "'atelier' and edit_decisions.bespoke.{entry, composition_id} so "
+                    "runtime governance and the atelier renderer are applied."
+                ),
+            )
+
+        if not shutil.which("npx"):
+            return ToolResult(
+                success=False,
+                error="npx not found. Install Node.js to use Remotion rendering.",
             )
 
         output_path = Path(inputs.get("output_path", "renders/remotion_output.mp4"))
@@ -2370,6 +2492,21 @@ class VideoCompose(BaseTool):
         except Exception as e:
             result["issues"].append(f"transcript_comparison could not parse transcript: {e}")
             return result
+
+        # Provider transcript envelopes are not perfectly uniform. The
+        # canonical OpenMontage shape has top-level word_timestamps, while
+        # some otherwise compatible responses keep words under each segment.
+        # Normalize only at this existing transcript-consumption boundary.
+        if not transcript_data.get("word_timestamps"):
+            nested_words = [
+                word
+                for segment in transcript_data.get("segments", [])
+                if isinstance(segment, dict)
+                for word in (segment.get("words") or [])
+                if isinstance(word, dict)
+            ]
+            if nested_words:
+                transcript_data["word_timestamps"] = nested_words
 
         transcript_words = [
             w.get("word", "").strip() for w in transcript_data.get("word_timestamps", [])

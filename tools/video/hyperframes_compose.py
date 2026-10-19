@@ -241,6 +241,17 @@ class HyperFramesCompose(BaseTool):
 
     _NODE_FLOOR_MAJOR = 22
     _NPM_PACKAGE = "hyperframes"  # published npm name (NOT @hyperframes/cli — that's 404)
+
+    @classmethod
+    def _npx_spec(cls) -> str:
+        """Package spec handed to `npx`.
+
+        Unpinned by default (`hyperframes`, npx resolves the latest). Set
+        OPENMONTAGE_HYPERFRAMES_VERSION (e.g. `0.8.174`) to run an exact
+        version, so renders are reproducible across machines and over time.
+        """
+        version = os.environ.get("OPENMONTAGE_HYPERFRAMES_VERSION", "").strip()
+        return f"{cls._NPM_PACKAGE}@{version}" if version else cls._NPM_PACKAGE
     # Process-level cache for the npm resolve check. Shape:
     #   {"version": "0.4.5"}   → package resolves
     #   {"error": "<short>"}   → resolution failed (offline, unpublished, etc.)
@@ -342,7 +353,7 @@ class HyperFramesCompose(BaseTool):
 
         try:
             proc = subprocess.run(
-                [npx, "--yes", cls._NPM_PACKAGE, "doctor", "--json"],
+                [npx, "--yes", cls._npx_spec(), "doctor", "--json"],
                 capture_output=True,
                 text=True,
                 timeout=20,
@@ -1360,7 +1371,7 @@ class HyperFramesCompose(BaseTool):
         want to raise CalledProcessError on non-zero exits — the caller
         parses lint/validate/render exit codes itself.
         """
-        cmd = ["npx", "--yes", "hyperframes", *args]
+        cmd = ["npx", "--yes", self._npx_spec(), *args]
         # On Windows, resolve the .cmd wrapper so subprocess can find it
         # without shell=True.
         if os.name == "nt":
