@@ -92,13 +92,13 @@ For each script section:
 6. Map cues to provider parameters:
    - OpenAI: `instructions` only with `model: "gpt-4o-mini-tts"`; use `response_format` for output format
    - Google TTS: `input_type: "ssml"` when using `<break>` tags, plus `speaking_rate` in `0.25..2.0` and `pitch` in `-20..20`
-   - ElevenLabs: `stability`, `similarity_boost`, `style`, `speed`, and `use_speaker_boost`
+   - ElevenLabs: model-specific controls only. `eleven_multilingual_v2` and older accept `stability`, `similarity_boost`, `style`, `speed`, and `use_speaker_boost`; `eleven_v4*` accepts only `stability` and `similarity_boost`, and no SSML; `eleven_v3` accepts no continuity inputs (`previous_*`/`next_*`). The tool rejects unsupported combinations before any paid request.
    - Azure: voice aliases (`andrew`, `brandon`, `ava`, `guy`, `jenny`) or any Azure short name, SSML `rate` (e.g. `"-4%"`), `pitch` (e.g. `"+1st"`), and `style` (e.g. `"narration-professional"`) — see the `azure-text-to-speech` skill
 7. Generate using `tts_selector` — it auto-routes to the best available TTS provider based on user preference and availability. Check the registry's `best_for` fields to understand each provider's strengths.
 8. Record the applied `voice_performance` metadata on each narration asset
 9. Verify the audio file exists and duration matches expected timing (±15%)
 
-**Pronunciation guide**: If the script contains technical terms, jargon, or names with non-obvious pronunciation, include a pronunciation map in the TTS request.
+**Pronunciation guide**: If the script contains technical terms, jargon, or names with non-obvious pronunciation, handle them with a control the provider actually supports — for ElevenLabs, `pronunciation_dictionary_locators` (up to 3 native dictionaries) or a phonetic spelling in the text. A pronunciation map kept only in metadata changes nothing in the audio; listen to the result.
 
 **Flat voice failure:** If the approved voice sounds monotone, robotic, rushed,
 or ignores intended pauses, do not batch the remaining sections. Revise the

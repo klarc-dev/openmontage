@@ -91,7 +91,25 @@ class ElevenLabsTTS(BaseTool):
                     "eleven_turbo_v2_5",
                     "eleven_flash_v2_5",
                 ],
-                "description": "TTS model to use",
+                "description": (
+                    "TTS model to use. eleven_v3 accepts no continuity "
+                    "inputs (request IDs or previous/next text); eleven_v4* accept only "
+                    "stability and similarity_boost voice settings."
+                ),
+            },
+            "pronunciation_dictionary_locators": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {
+                    "type": "object",
+                    "required": ["pronunciation_dictionary_id", "version_id"],
+                    "properties": {
+                        "pronunciation_dictionary_id": {"type": "string", "minLength": 1},
+                        "version_id": {"type": "string", "minLength": 1},
+                    },
+                    "additionalProperties": False,
+                },
+                "description": "Native pronunciation dictionaries applied in order (maximum 3)",
             },
             "stability": {
                 "type": "number",
@@ -122,18 +140,29 @@ class ElevenLabsTTS(BaseTool):
                 "default": True,
             },
             "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295},
-            "language_code": {"type": "string"},
-            "previous_text": {"type": "string"},
-            "next_text": {"type": "string"},
+            "language_code": {
+                "type": "string",
+                "description": "ISO 639-1 language code, for models that support language enforcement",
+            },
+            "previous_text": {
+                "type": "string",
+                "description": "Text preceding this chunk, used as prosodic context",
+            },
+            "next_text": {
+                "type": "string",
+                "description": "Text following this chunk, used as prosodic context",
+            },
             "previous_request_ids": {
                 "type": "array",
                 "items": {"type": "string"},
                 "maxItems": 3,
+                "description": "Recent request IDs used to preserve prosody across chunks",
             },
             "next_request_ids": {
                 "type": "array",
                 "items": {"type": "string"},
                 "maxItems": 3,
+                "description": "Request IDs of following chunks, when regenerating a middle chunk",
             },
             "apply_text_normalization": {
                 "type": "string",
@@ -174,6 +203,8 @@ class ElevenLabsTTS(BaseTool):
     ] + [
         "seed",
         "language_code",
+        "pronunciation_dictionary_locators",
+        "apply_text_normalization",
         "previous_text",
         "next_text",
         "previous_request_ids",
@@ -185,6 +216,12 @@ class ElevenLabsTTS(BaseTool):
     user_visible_verification = ["Listen to generated audio for natural speech quality"]
 
     DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
+    # eleven_v3 rejects request stitching and previous/next text with a 400.
+    NO_CONTINUITY_MODELS = frozenset({"eleven_v3"})
+    # v4 exposes only stability and similarity. Sending the legacy controls makes
+    # an otherwise valid request fail at the provider boundary.
+    TWO_SETTING_MODELS = frozenset({"eleven_v4", "eleven_v4_turbo"})
+    CONTINUITY_FIELDS = ("previous_request_ids", "next_request_ids", "previous_text", "next_text")
 
     def get_status(self) -> ToolStatus:
         if os.environ.get("ELEVENLABS_API_KEY"):
@@ -221,34 +258,63 @@ class ElevenLabsTTS(BaseTool):
         )
         return result
 
-    def _generate(self, inputs: dict[str, Any], api_key: str) -> ToolResult:
-        import requests
+    def build_request_payload(self, inputs: dict[str, Any]) -> dict[str, Any]:
+        """Validate inputs and build the exact JSON body sent to ElevenLabs.
 
+        Pure (no network, no secrets), so a dry run can audit the same payload
+        that a real call would send. Model-specific constraints fail here,
+        before a paid request is spent.
+        """
         from jsonschema import validate
 
+        # An explicit None means "not set" for every optional control.
+        inputs = {k: v for k, v in inputs.items() if v is not None}
         validate(inputs, self.input_schema)
         text = inputs["text"]
+        model_id = inputs.get("model_id", "eleven_multilingual_v2")
         limit = (
             10000
-            if inputs.get("model_id", "").startswith("eleven_v4")
+            if model_id.startswith("eleven_v4")
             else 5000
-            if inputs.get("model_id") == "eleven_v3"
+            if model_id == "eleven_v3"
             else 40000
         )
         if not text.strip() or len(text) > limit:
             raise ValueError(f"Text must contain 1–{limit} characters for this model")
-        voice_id = inputs.get("voice_id", self.DEFAULT_VOICE_ID)
-        model_id = inputs.get("model_id", "eleven_multilingual_v2")
-        output_format = inputs.get("output_format", "mp3_44100_128")
+        if model_id in self.TWO_SETTING_MODELS:
+            unsupported = [k for k in ("style", "speed", "use_speaker_boost") if k in inputs]
+            if unsupported:
+                raise ValueError(f"{model_id} does not accept voice settings {unsupported}")
+            if re.search(r"<[^>]+>", text):
+                raise ValueError(f"{model_id} does not support SSML tags")
+            if inputs.get("pronunciation_dictionary_locators"):
+                raise ValueError(
+                    f"{model_id} pronunciation dictionary support is not documented; "
+                    "spell the pronunciation in the text instead"
+                )
+        if model_id in self.NO_CONTINUITY_MODELS:
+            sent = [f for f in self.CONTINUITY_FIELDS if inputs.get(f)]
+            if sent:
+                # Fail before spending a request: these models reject every
+                # continuity input with a 400. Dropping them silently would change
+                # how the narration is stitched without anyone deciding it.
+                raise ValueError(
+                    f"{model_id} does not accept continuity inputs ({', '.join(sent)}). "
+                    "Generate the whole script in one request instead of stitching chunks."
+                )
+
         voice_settings = {
             "stability": inputs.get("stability", 0.5),
             "similarity_boost": inputs.get("similarity_boost", 0.75),
-            "style": inputs.get("style", 0.0),
-            "speed": inputs.get("speed", 1.0),
-            "use_speaker_boost": inputs.get("use_speaker_boost", True),
         }
+        if model_id not in self.TWO_SETTING_MODELS:
+            voice_settings.update({
+                "style": inputs.get("style", 0.0),
+                "speed": inputs.get("speed", 1.0),
+                "use_speaker_boost": inputs.get("use_speaker_boost", True),
+            })
 
-        payload = {"text": text, "model_id": model_id, "voice_settings": voice_settings}
+        payload: dict[str, Any] = {"text": text, "model_id": model_id, "voice_settings": voice_settings}
         for field in (
             "seed",
             "language_code",
@@ -257,9 +323,25 @@ class ElevenLabsTTS(BaseTool):
             "previous_request_ids",
             "next_request_ids",
             "apply_text_normalization",
+            "pronunciation_dictionary_locators",
         ):
-            if field in inputs:
+            if inputs.get(field) is not None:
                 payload[field] = inputs[field]
+        return payload
+
+    def _generate(self, inputs: dict[str, Any], api_key: str) -> ToolResult:
+        import requests
+
+        payload = self.build_request_payload(inputs)
+        text = payload["text"]
+        model_id = payload["model_id"]
+        voice_settings = payload["voice_settings"]
+        voice_id = (
+            inputs.get("voice_id")
+            or os.environ.get("ELEVENLABS_VOICE_ID")
+            or self.DEFAULT_VOICE_ID
+        )
+        output_format = inputs.get("output_format", "mp3_44100_128")
         with_timestamps = bool(inputs.get("with_timestamps", False))
         endpoint = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
         if with_timestamps:
@@ -275,7 +357,20 @@ class ElevenLabsTTS(BaseTool):
             params={"output_format": output_format},
             timeout=120,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError:
+            # The API explains rejections in the body (unsupported parameter,
+            # quota, unknown voice). raise_for_status() alone discards it.
+            try:
+                detail = response.json().get("detail")
+                detail = detail.get("message", detail) if isinstance(detail, dict) else detail
+            except ValueError:
+                detail = response.text[:500]
+            return ToolResult(
+                success=False,
+                error=f"ElevenLabs rejected the request ({response.status_code}): {detail}",
+            )
 
         alignment = None
         if with_timestamps:

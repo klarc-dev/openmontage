@@ -101,6 +101,106 @@ class TestElevenLabsTTS:
         assert "text_to_speech" in tool.capabilities
         assert "voice_selection" in tool.capabilities
 
+    def test_environment_default_voice_is_used(self, monkeypatch, tmp_path):
+        tool = ElevenLabsTTS()
+        monkeypatch.setenv("ELEVENLABS_VOICE_ID", "custom-voice-id")
+
+        class Response:
+            content = b"audio"
+            headers = {}
+
+            def raise_for_status(self):
+                return None
+
+        import requests
+
+        captured = {}
+
+        def fake_post(url, **kwargs):
+            captured["url"] = url
+            return Response()
+
+        monkeypatch.setattr(requests, "post", fake_post)
+        result = tool._generate(
+            {"text": "Bonjour", "output_path": str(tmp_path / "voice.mp3")},
+            "api-key",
+        )
+
+        assert result.success
+        assert captured["url"].endswith("/custom-voice-id")
+
+    def test_explicit_voice_overrides_environment_default(self, monkeypatch, tmp_path):
+        tool = ElevenLabsTTS()
+        monkeypatch.setenv("ELEVENLABS_VOICE_ID", "environment-voice")
+
+        class Response:
+            content = b"audio"
+            headers = {}
+
+            def raise_for_status(self):
+                return None
+
+        import requests
+
+        captured = {}
+
+        def fake_post(url, **kwargs):
+            captured["url"] = url
+            return Response()
+
+        monkeypatch.setattr(requests, "post", fake_post)
+        result = tool._generate(
+            {
+                "text": "Bonjour",
+                "voice_id": "explicit-voice",
+                "output_path": str(tmp_path / "voice.mp3"),
+            },
+            "api-key",
+        )
+
+        assert result.success
+        assert captured["url"].endswith("/explicit-voice")
+
+    def test_prosody_context_and_normalization_are_forwarded(self, monkeypatch, tmp_path):
+        tool = ElevenLabsTTS()
+
+        class Response:
+            content = b"audio"
+            headers = {"request-id": "request-2"}
+
+            def raise_for_status(self):
+                return None
+
+        import requests
+
+        captured = {}
+
+        def fake_post(url, **kwargs):
+            captured.update(kwargs)
+            return Response()
+
+        monkeypatch.setattr(requests, "post", fake_post)
+        result = tool._generate(
+            {
+                "text": "Deuxième chapitre.",
+                "previous_request_ids": ["request-1"],
+                "previous_text": "Premier chapitre.",
+                "next_text": "Troisième chapitre.",
+                "apply_text_normalization": "on",
+                "seed": 42,
+                "output_path": str(tmp_path / "voice.mp3"),
+            },
+            "api-key",
+        )
+
+        assert result.success
+        assert captured["json"]["previous_request_ids"] == ["request-1"]
+        assert captured["json"]["previous_text"] == "Premier chapitre."
+        assert captured["json"]["next_text"] == "Troisième chapitre."
+        assert captured["json"]["apply_text_normalization"] == "on"
+        assert captured["json"]["seed"] == 42
+        assert result.data["request_id"] == "request-2"
+
 
 class TestPiperTTS:
     def test_identity(self):

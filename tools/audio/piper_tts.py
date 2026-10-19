@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -116,6 +117,23 @@ class PiperTTS(BaseTool):
         result.duration_seconds = round(time.time() - start, 2)
         return result
 
+    def _resolve_model(self, requested: str) -> str:
+        """Resolve a Piper voice name to an installed ONNX model path."""
+        requested_path = Path(requested).expanduser()
+        if requested_path.exists():
+            return str(requested_path)
+
+        configured = os.environ.get("PIPER_MODEL_PATH", "").strip()
+        if configured:
+            configured_path = Path(configured).expanduser()
+            if configured_path.exists():
+                return str(configured_path)
+
+        installed = Path.home() / ".piper" / "models" / f"{requested}.onnx"
+        if installed.exists():
+            return str(installed)
+        return requested
+
     def _generate(self, inputs: dict[str, Any]) -> ToolResult:
         output_path = Path(inputs.get("output_path", "tts_output.wav"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,7 +141,7 @@ class PiperTTS(BaseTool):
         proc = subprocess.run(
             [
                 "piper",
-                "--model", inputs.get("model", "en_US-lessac-medium"),
+                "--model", self._resolve_model(inputs.get("model", "en_US-lessac-medium")),
                 "--speaker", str(inputs.get("speaker_id", 0)),
                 "--length-scale", str(inputs.get("length_scale", 1.0)),
                 "--sentence-silence", str(inputs.get("sentence_silence", 0.3)),
